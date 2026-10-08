@@ -110,9 +110,13 @@ max_secs_party_to_traded = 60         # from being in a party to the trade being
 # Sound (docs/SOUND.md 8; scripts/check-sound.sh): synthesized at start, mixed by the client
 # natively and by the browser in the browser; proved by rendering a run into a WAV.
 [sound]
-max_wasm_added_bytes = 40960          # what the phase may add to the WebGPU wasm, of the 71,334 that were left; measured 32,223
+# What the phase added, for the record: the budgets were 40,960 for the wasm (of the 71,334 then
+# left) and 307,200 for the native client (cpal with ALSA, and the mixer). Not gated since
+# 2026-10-08: later phases grew both past those sums, and the totals are the size gates' to
+# hold ([binary], [web]). check-sound.sh prints the growth since Phase 12 as a note.
+wasm_added_bytes = 32223              # measured when the phase landed
 webgpu_wasm_bytes_before = 977242     # the WebGPU wasm before the phase (Phase 12)
-max_native_added_bytes = 307200       # cpal with ALSA, and the mixer; measured 128,560 (the client built alone, as the baseline is)
+native_added_bytes = 128560           # measured when the phase landed (the client built alone, as the baseline is)
 native_bytes_before = 9483040         # the native client before the phase (ci/baselines/gm-client-size of Phase 12)
 max_patch_bytes = 2097152             # the rendered patches in memory; measured 1,228,060 (rendered in 32 ms, release)
 max_block_us = 200                    # microseconds per 512-frame stereo block with 32 voices, release; measured 92 in the bench, 40-91 in the client's dump, 25-39 on the device

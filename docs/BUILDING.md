@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable 1.88 or newer with `clippy` and `rustfmt` (`rustup component add clippy rustfmt`).
+- Rust 1.97.0 with `clippy` and `rustfmt`: `rust-toolchain.toml` names it and rustup installs it on the first build. CI builds with the same one (ci.yml); it moves on purpose, after a newer clippy's lints are met, since warnings are errors there.
 - A Vulkan driver. Linux: Arch `vulkan-radeon` / `vulkan-intel` / `vulkan-swrast`
   (software), Debian/Ubuntu `mesa-vulkan-drivers`. Without an ICD the client reports
   "no compatible GPU adapter"; `--software` selects the CPU adapter explicitly.

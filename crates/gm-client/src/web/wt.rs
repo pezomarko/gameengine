@@ -10,6 +10,12 @@ use wasm_bindgen_futures::JsFuture;
 /// Datagrams the browser keeps for us between two frames (WEB.md 2.1): a frame at 60 Hz sees
 /// one or two snapshots, a stalled page must not hold a second of them.
 const INCOMING_DATAGRAMS: u32 = 16;
+/// Datagrams the browser queues for the wire: a frame writes one input per tick it stepped
+/// (eight at most), in one task, and the browser sends them only once the task is over.
+/// Chromium defaults the queue to **one** and drops the oldest past it, so a slow frame's
+/// inputs but the last were thrown away before they left and the zone starved (its 64 Hz
+/// saw 15 inputs a second from a page at 15 fps).
+const OUTGOING_DATAGRAMS: u32 = 16;
 /// Datagrams older than this are dropped by the browser on either side, milliseconds.
 const DATAGRAM_MAX_AGE_MS: f64 = 250.0;
 
@@ -115,6 +121,7 @@ impl Session {
             ("incomingMaxAge", JsValue::from(DATAGRAM_MAX_AGE_MS)),
             ("outgoingMaxAge", JsValue::from(DATAGRAM_MAX_AGE_MS)),
             ("incomingHighWaterMark", JsValue::from(INCOMING_DATAGRAMS)),
+            ("outgoingHighWaterMark", JsValue::from(OUTGOING_DATAGRAMS)),
             (
                 "incomingMaxBufferedDatagrams",
                 JsValue::from(INCOMING_DATAGRAMS),

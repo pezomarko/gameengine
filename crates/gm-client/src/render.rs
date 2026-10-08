@@ -2,7 +2,6 @@
 //! entity boxes in one more, and one per character (`characters`).
 
 use glam::{Mat4, Vec3};
-use wgpu::util::DeviceExt;
 
 use crate::Error;
 use crate::characters::{CharacterDraw, Characters};
@@ -21,6 +20,30 @@ pub struct Gpu {
     pub info: wgpu::AdapterInfo,
     /// BC texture compression is available: model atlases upload as they are (MODELS.md 8).
     pub bc: bool,
+}
+
+impl Gpu {
+    /// A buffer holding `contents`, filled through the queue. Not mapped at creation: Chrome's
+    /// CPU adapter (the software WebGPU the browser gates run on) refuses a mapped-at-creation
+    /// buffer past a size the town's vertices exceed ("too large for the implementation"), and
+    /// a queue write carries any size.
+    pub fn buffer(&self, label: &str, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        let size = (contents.len() as u64 + 3) & !3;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if size == contents.len() as u64 {
+            self.queue.write_buffer(&buffer, 0, contents);
+        } else if !contents.is_empty() {
+            let mut padded = contents.to_vec();
+            padded.resize(size as usize, 0);
+            self.queue.write_buffer(&buffer, 0, &padded);
+        }
+        buffer
+    }
 }
 
 impl Gpu {
@@ -458,16 +481,16 @@ fn world_gpu(
             },
         ],
     });
-    let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("world vertices"),
-        contents: bytemuck::cast_slice(&world.vertices),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("world indices"),
-        contents: bytemuck::cast_slice(&world.indices),
-        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-    });
+    let vertex_buf = gpu.buffer(
+        "world vertices",
+        bytemuck::cast_slice(&world.vertices),
+        wgpu::BufferUsages::VERTEX,
+    );
+    let index_buf = gpu.buffer(
+        "world indices",
+        bytemuck::cast_slice(&world.indices),
+        wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+    );
     WorldGpu {
         textures_bg,
         vertex_buf,

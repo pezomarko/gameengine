@@ -796,6 +796,7 @@ pub fn command_exit_ticks(dt: f32) -> Tick {
 /// root's: the stance's base (`scoped` while the scope is up), the move's share past a
 /// walk, the air's, and the spray's growing with the square of the shots within `recover`
 /// of the last. `shot` is the index of the shot in its spray (0 for the first).
+#[allow(clippy::too_many_arguments)]
 pub fn cone_deg(
     f: &crate::vocab::Firearm,
     max_speed: f32,

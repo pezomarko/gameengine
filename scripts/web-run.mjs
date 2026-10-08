@@ -67,8 +67,15 @@ const flags = [
   "about:blank",
 ];
 const browser = spawn(chrome, flags, {
-  stdio: ["ignore", "ignore", "ignore"],
+  stdio: ["ignore", "ignore", "pipe"],
   env: { ...process.env, TMPDIR: scratch },
+});
+// The browser's own last words, for a run that never reached the page (a machine without
+// the GPU asked for, a browser that is not there, a profile it could not take).
+const said = [];
+browser.stderr.on("data", (chunk) => {
+  for (const line of String(chunk).split("\n")) if (line.trim()) said.push(line);
+  while (said.length > 40) said.shift();
 });
 let finished = false;
 let gone = false;
@@ -89,6 +96,7 @@ const finish = (code) => {
 };
 const fail = (why) => {
   console.error("web-run: " + why);
+  if (said.length) console.error("web-run: the browser said:\n" + said.join("\n"));
   finish(1);
 };
 browser.on("error", (e) => { gone = true; fail(`the browser did not start (${chrome}): ${e.message}`); });
@@ -100,7 +108,9 @@ process.on("unhandledRejection", (e) => fail(String(e && e.stack ? e.stack : e))
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => fail(`stopped by ${signal}`));
 
 async function target() {
-  for (let i = 0; i < 100 && !finished; i++) {
+  // Up to 60 s: a first start on a slow machine (a CI runner on its software GPU) can take
+  // well over ten.
+  for (let i = 0; i < 600 && !finished; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
       const page = list.find((t) => t.type === "page");

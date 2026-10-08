@@ -524,6 +524,9 @@ struct App {
     /// The fingers on the screen (MODES.md 5.6), the controls drawn for them this frame
     /// (where a finger may land on one), and a tap's primary, held a moment.
     fingers: Fingers,
+    /// A finger dragged the look this frame: its turn is applied even when it lifted
+    /// before the frame came (a swipe whole between two slow frames).
+    finger_turn: bool,
     touch_buttons: Vec<(TouchButton, ui::Rect)>,
     tap_fire: Option<Instant>,
     /// The yaw each body was drawn facing last frame (LOOK.md 13.9), by its key.
@@ -877,6 +880,7 @@ fn app(opts: Options, bsp: Bsp, palette: world::Palette, sim: Sim, start: Start)
         cursor_icon: CursorIcon::Default,
         rpg_right: None,
         fingers: Fingers::default(),
+        finger_turn: false,
         touch_buttons: Vec::new(),
         tap_fire: None,
         facings: HashMap::new(),
@@ -1539,10 +1543,11 @@ pub(crate) fn facing(
         if free || off.abs() <= FACING_BACKPEDAL_DEG {
             target = travel;
         }
-    } else if free && !anim::acts(anim) {
-        if let Some(drawn) = drawn {
-            return drawn;
-        }
+    } else if free
+        && !anim::acts(anim)
+        && let Some(drawn) = drawn
+    {
+        return drawn;
     }
     let Some(drawn) = drawn else {
         return target.rem_euclid(360.0);
@@ -4875,6 +4880,7 @@ impl App {
                     let gain = touch::LOOK_GAIN / dpr;
                     self.input.mouse_dx += dx * gain;
                     self.input.mouse_dy += dy * gain;
+                    self.finger_turn = true;
                 }
                 TouchEvent::Pinch(ratio) => {
                     if self.rpg_mode() && ratio > 0.0 {
@@ -5212,7 +5218,7 @@ impl App {
             self.sim.yaw = self.bench_yaw0 + BENCH_CROWD_SWING_DEG * (t * 0.7).sin();
         } else if bench {
             self.sim.yaw += BENCH_YAW_DEG_PER_S * frame_dt;
-        } else if (self.grabbed || self.fingers.turning()) && !up {
+        } else if (self.grabbed || self.fingers.turning() || self.finger_turn) && !up {
             let turn = self.settings.sensitivity / self.zoom.max(1.0);
             let tilt = if self.settings.invert { -turn } else { turn };
             self.sim.yaw -= self.input.mouse_dx * turn;
@@ -5226,6 +5232,7 @@ impl App {
         self.sim.yaw = self.sim.yaw.rem_euclid(360.0);
         self.input.mouse_dx = 0.0;
         self.input.mouse_dy = 0.0;
+        self.finger_turn = false;
 
         #[cfg(not(target_arch = "wasm32"))]
         let watching = self.playback.is_some();

@@ -69,9 +69,14 @@ the reviews and what running it found.
   PROTOCOL.md 4 to 7 hold unchanged. In the browser incoming datagrams queue in the session's
   `datagrams.readable`; the client sets the queue to 16 datagrams (the property is
   `incomingMaxBufferedDatagrams` in Chromium, where it defaults to **one**, and
-  `incomingHighWaterMark` in the specification: both are set) and `incomingMaxAge` /
-  `outgoingMaxAge` to 250 ms. When the queue is full the browser drops the oldest. The
-  client's own queue between its reader task and the frame is bounded the same way (32
+  `incomingHighWaterMark` in the specification: both are set), the outgoing queue
+  (`outgoingHighWaterMark`) to 16 as well, and `incomingMaxAge` / `outgoingMaxAge` to 250 ms.
+  When a queue is full the browser drops the oldest. The outgoing queue matters on a slow
+  page: a frame writes one input datagram per tick it stepped, all in one task, and the
+  browser sends them only after the task; at Chromium's default of one every input but the
+  last written in the frame was dropped before it left, and a zone at 64 Hz saw 15 inputs a
+  second from a page at 15 fps and starved the rest (seen on CI's software WebGL, 2026-10-08).
+  The client's own queue between its reader task and the frame is bounded the same way (32
   snapshots, oldest out): reader tasks run in a hidden tab, frames do not.
 - **Handshake** is PROTOCOL.md 8: the client opens one bidirectional stream, sends `Hello`,
   reads `Welcome` or `Reject`.

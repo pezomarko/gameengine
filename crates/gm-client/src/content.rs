@@ -35,16 +35,20 @@ pub struct Content {
     /// that landed since the last frame (two may, when the scale changed twice while the
     /// page was hidden, and the one asked for last must not be lost to the other).
     #[cfg(target_arch = "wasm32")]
-    atlas_inbox: std::rc::Rc<std::cell::RefCell<Vec<(u8, Option<Vec<u8>>)>>>,
+    atlas_inbox: Inbox<u8>,
     pub props: HashMap<String, PropState>,
     /// Where props are read from: a directory natively, a URL prefix in the browser.
     base: String,
     /// Files that arrived (the browser's fetches land here; natively a read is immediate).
     #[cfg(target_arch = "wasm32")]
-    inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Option<Vec<u8>>)>>>,
+    inbox: Inbox<String>,
     /// What was said about the bundle, for the report.
     pub note: String,
 }
+
+/// Fetches that landed, keyed by what was asked for; `None` for one that failed.
+#[cfg(target_arch = "wasm32")]
+type Inbox<K> = std::rc::Rc<std::cell::RefCell<Vec<(K, Option<Vec<u8>>)>>>;
 
 impl Content {
     /// A client without a bundle.
@@ -272,7 +276,8 @@ impl Content {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = sha;
+            // The browser decodes when the fetch lands (`poll`), not here.
+            let _ = (sha, &mut load);
             let url = format!("{}/{file}", self.base);
             let inbox = self.inbox.clone();
             let key_owned = key.to_string();

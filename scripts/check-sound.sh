@@ -135,9 +135,10 @@ else
   check_max "$(below "$tmp/fight.wav" 0 "$SECS")" "$(budget sound max_steps_db)" "dB under full scale of the loudest window of the fight"
 fi
 
-# 2c. What the phase added to the native binary.
-check_max "$(( $(stat -c %s target/release/gm-client) - $(budget sound native_bytes_before) ))" \
-  "$(budget sound max_native_added_bytes)" "bytes the sound added to the native client"
+# 2c. The native binary's growth since the phase, for the record (SOUND.md 8): later phases
+#    grew it past what the sound alone added, so the total is the size gate's to hold
+#    (scripts/check-binary-size.sh), not this one's.
+echo "note: native client $(stat -c %s target/release/gm-client) bytes, $(( $(stat -c %s target/release/gm-client) - $(budget sound native_bytes_before) )) over the Phase 12 baseline (the sound added $(budget sound native_added_bytes) of them)"
 
 [[ "$BROWSER" == 1 ]] || exit $status
 
@@ -146,8 +147,7 @@ check_max "$(( $(stat -c %s target/release/gm-client) - $(budget sound native_by
 command -v node >/dev/null || { echo "check-sound: --browser needs node"; exit 1; }
 [[ "${SKIP_BUILD:-}" == 1 && -f target/web/gm-client-webgpu_bg.wasm ]] || scripts/build-web.sh > target/web-build.log 2>&1 \
   || { tail -30 target/web-build.log; echo "FAIL: the web build"; exit 1; }
-check_max "$(( $(stat -c %s target/web/gm-client-webgpu_bg.wasm) - $(budget sound webgpu_wasm_bytes_before) ))" \
-  "$(budget sound max_wasm_added_bytes)" "bytes the sound added to the WebGPU wasm"
+echo "note: WebGPU wasm $(stat -c %s target/web/gm-client-webgpu_bg.wasm) bytes, $(( $(stat -c %s target/web/gm-client-webgpu_bg.wasm) - $(budget sound webgpu_wasm_bytes_before) )) over Phase 12 (the sound added $(budget sound wasm_added_bytes) of them; the web gate holds the total)"
 echo "note: WebGPU wasm $(stat -c %s target/web/gm-client-webgpu_bg.wasm) bytes of $(budget web max_webgpu_wasm_bytes); WebGL2 $(stat -c %s target/web/gm-client-webgl_bg.wasm)"
 http=$((20000 + RANDOM % 20000))
 mkdir -p "$tmp/web"; rm -f "$tmp/web"/*

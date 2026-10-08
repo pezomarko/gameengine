@@ -28,8 +28,9 @@ jobs:
       GM_TEST_DATABASE_URL: postgres://gm:gm@localhost:5432/gm_test
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.97.0 # rust-toolchain.toml
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: "System packages (ALSA's headers: the client links the sound device, SOUND.md 4)"
@@ -100,14 +101,18 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0 # rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
         with:
           key: release
-      - name: System packages (software Vulkan; ALSA's headers for the sound device; Xvfb for the sound gate's client)
-        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers libvulkan1 libasound2-dev xvfb
+      - name: System packages (software Vulkan; ALSA's headers for the sound device; Xvfb and the X input libraries winit loads for the sound gate's client)
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers libvulkan1 libasound2-dev xvfb libxkbcommon-x11-0 libxcursor1 libx11-xcb1
       - name: Build release client
         run: cargo build --release -p gm-client --locked
+      - name: Build the zone and the bots (after the client alone, so the size gates measure what the baseline did; the sound gate's fight runs on them)
+        run: cargo build --release -p gm-server -p gm-bot --locked
       - name: Binary size gate
         run: SKIP_BUILD=1 scripts/check-binary-size.sh
       - name: Binary size self-test (a 1 MiB regression must fail)
@@ -140,8 +145,9 @@ jobs:
       GM_TEST_DATABASE_URL: postgres://gm:gm@localhost:5432/gm_test
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.97.0 # rust-toolchain.toml
           targets: wasm32-unknown-unknown
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -150,14 +156,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: System packages (brotli for the size gate, software Vulkan for Chromium's WebGPU, ALSA's headers, Xvfb for the sound gate's native client)
-        run: sudo apt-get update -q && sudo apt-get install -y -q brotli mesa-vulkan-drivers libvulkan1 libasound2-dev xvfb
+      - name: System packages (brotli for the size gate, software Vulkan for Chromium's WebGPU, ALSA's headers, Xvfb and the X input libraries winit loads for the sound gate's native client)
+        run: sudo apt-get update -q && sudo apt-get install -y -q brotli mesa-vulkan-drivers libvulkan1 libasound2-dev xvfb libxkbcommon-x11-0 libxcursor1 libx11-xcb1
       - name: Clippy for the browser target, both builds
         run: |
           cargo clippy -p gm-client --target wasm32-unknown-unknown --locked -- -D warnings
           cargo clippy -p gm-client --target wasm32-unknown-unknown --features webgl --locked -- -D warnings
       - name: Web gate (sizes, QUIC and WebTransport in one zone, headless Chromium on its software GPU)
-        run: CHROME=google-chrome scripts/check-web.sh --browser --software
+        run: CHROME=google-chrome KEEP="$RUNNER_TEMP/web" scripts/check-web.sh --browser --software
+      - name: The web gate's logs, when it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-browser
+          path: ${{ runner.temp }}/web
+          if-no-files-found: ignore
       - name: Screens gate in the browser (the page's form by the browser's own input, the canvas screens by script)
         run: CHROME=google-chrome SKIP_TESTS=1 KEEP="$RUNNER_TEMP/screens" scripts/check-screens.sh --browser --software
       - name: The screens gate's logs, when it failed

@@ -1,0 +1,7 @@
+# The toolchain CI and the reference machine build with (BUILDING.md 1). Clippy's lints move
+# with every release and `-D warnings` is the rule, so a floating `stable` turned CI red on
+# a release day; the version moves here, on purpose, after the new lints are met.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

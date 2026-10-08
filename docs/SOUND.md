@@ -299,8 +299,8 @@ The web-sys features this adds (`AudioContext`, `BaseAudioContext`, `AudioContex
 
 | Budget | Value | Why |
 |---|---|---|
-| bytes of WebGPU wasm this phase adds | 40 KiB | of the 71,334 left (1); the measured delta is in 11 |
-| bytes of the native binary this phase adds | 300 KiB | `cpal` with ALSA, and the mixer |
+| bytes of WebGPU wasm this phase added | 40 KiB, measured 32,223 | of the 71,334 left (1); the measured delta is in 11. A record since 2026-10-08, not a gate: later phases grew the wasm past it, and the web gate holds the total |
+| bytes of the native binary this phase added | 300 KiB, measured 128,560 | `cpal` with ALSA, and the mixer. A record likewise; the size gate holds the total |
 | rendered patches in memory | 2 MiB | 2 |
 | microseconds per 512-frame block, 32 voices, release | 200 | a block is 11.6 ms at 44.1 kHz; the callback must be a small part of it on the integrated machine |
 | cues started in one frame | 8 | 3 |

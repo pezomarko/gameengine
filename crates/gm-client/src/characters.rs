@@ -6,7 +6,6 @@ use glam::{Mat4, Vec3};
 use gm_model::format::{Vertex, bc1_level_bytes, quantize_vertices};
 use gm_model::mannequin::MeshData;
 use gm_model::{BONES, Model, Pose, bc1, skin_matrices};
-use wgpu::util::DeviceExt;
 
 use crate::render::{DEPTH_FORMAT, Gpu};
 
@@ -406,16 +405,16 @@ impl Characters {
             texture
         };
         let gpu_model = GpuModel {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("model vertices"),
-                contents: bytemuck::cast_slice(&model.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("model indices"),
-                contents: bytemuck::cast_slice(&model.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices: gpu.buffer(
+                "model vertices",
+                bytemuck::cast_slice(&model.vertices),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            indices: gpu.buffer(
+                "model indices",
+                bytemuck::cast_slice(&model.indices),
+                wgpu::BufferUsages::INDEX,
+            ),
             index_count: model.indices.len() as u32,
             texture: self.texture_bind(device, &texture),
             scale: model.scale,
@@ -462,16 +461,16 @@ impl Characters {
             write_rgba(&gpu.queue, &texture, i as u32, *w, *h, data);
         }
         let gpu_model = GpuModel {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mannequin vertices"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mannequin indices"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices: gpu.buffer(
+                "mannequin vertices",
+                bytemuck::cast_slice(&vertices),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            indices: gpu.buffer(
+                "mannequin indices",
+                bytemuck::cast_slice(&indices),
+                wgpu::BufferUsages::INDEX,
+            ),
             index_count: indices.len() as u32,
             texture: self.texture_bind(device, &texture),
             scale,
