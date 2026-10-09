@@ -240,7 +240,8 @@ treats what it did as it treats the mouse and the keys (MODES.md 5.6 has the con
   the menu, or the target let go first in the RPG mode), and bottom right `jump` with the
   secondary (`2`) in the action and gun modes, the secondary alone in the RPG mode; every
   cell of the hotbar is a button for its key (`1`–`8`, Shift, C, the mouse buttons), held
-  while the finger is. The look's pointer lock is never asked for by a finger, nor by a
+  while the finger is, the item cells too (LOOK.md 3.2: `F`, `8`, `9`, `0`, a tap uses
+  the cell's stack; a phone has no `F`). The look's pointer lock is never asked for by a finger, nor by a
   screen going down once a finger has been seen: Chrome on a phone granted it to the tap
   that left the character screen and took it back at the next touch, and losing the lock
   is Escape (3.4), so every tap in the game opened the menu until a refused asking broke

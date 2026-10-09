@@ -147,9 +147,11 @@ pub struct OwnState {
     /// magazine and reserve, and whether the one in hand is being reloaded. `None` for a
     /// build without one: a bit.
     pub guns: Option<GunsWire>,
-    /// The kits carried and whether one is in use (MODES.md 11.3), in every mode. v12.
-    pub kits: u16,
-    pub using_kit: bool,
+    /// The item bar (LOOK.md 3.2, MODES.md 11.3), in every mode: how many of each cell's
+    /// stack the body carries, and the cell in use, 1-based, 0 for none. v18 (v12 carried
+    /// the kits as one count and one bit).
+    pub bar: [u16; gm_core::sim::BAR_CELLS],
+    pub using: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -353,8 +355,10 @@ fn write_own(w: &mut BitWriter, own: &OwnState) {
             w.write_bits(g.reloading as u64, 1);
         }
     }
-    w.write_uvar(own.kits as u64);
-    w.write_bits(own.using_kit as u64, 1);
+    for n in own.bar {
+        w.write_uvar(n as u64);
+    }
+    w.write_bits(own.using as u64, 3);
 }
 
 fn read_own(r: &mut BitReader<'_>) -> Result<OwnState, NetError> {
@@ -392,11 +396,17 @@ fn read_own(r: &mut BitReader<'_>) -> Result<OwnState, NetError> {
     } else {
         None
     };
-    let kits = u16::try_from(r.read_uvar()?).map_err(|_| NetError::Malformed("kits"))?;
-    let using_kit = r.read_bits(1)? == 1;
+    let mut bar = [0u16; gm_core::sim::BAR_CELLS];
+    for n in &mut bar {
+        *n = u16::try_from(r.read_uvar()?).map_err(|_| NetError::Malformed("bar"))?;
+    }
+    let using = r.read_bits(3)? as u8;
+    if using as usize > gm_core::sim::BAR_CELLS {
+        return Err(NetError::Malformed("using out of range"));
+    }
     Ok(OwnState {
-        kits,
-        using_kit,
+        bar,
+        using,
         stamina,
         focus,
         statuses,
@@ -686,8 +696,8 @@ mod tests {
                 reserve: [23, 32],
                 reloading: true,
             }),
-            kits: 3,
-            using_kit: true,
+            bar: [3, 0, 1, 0],
+            using: 1,
         };
         s.entities.push(player(1, shift, true));
         for i in 2..17 {
@@ -786,9 +796,9 @@ mod tests {
         next.own.statuses.clear();
         let bytes = next.encode(Some(&base));
         // header 2 + 3 x 4 + own (stamina 1, focus 2, count 4 bits, the guns' bit and
-        // their 4 bytes, the kits and the kit's bit since v12) + count 1 + removed 1,
-        // bit-packed: 24 bytes.
-        assert_eq!(bytes.len(), 24);
+        // their 4 bytes, the bar's four counts and the cell in use's 3 bits since v18)
+        // + count 1 + removed 1, bit-packed: 28 bytes.
+        assert_eq!(bytes.len(), 28);
         let back = Snapshot::decode(&bytes, |t| (t == 10).then_some(&base)).unwrap();
         assert_eq!(back, next);
         // One entity moves: only it is on the wire, the rest still come back.
@@ -797,7 +807,7 @@ mod tests {
         moved.baseline_tick = 10;
         moved.entities[7].pos[0] += 4;
         let bytes = moved.encode(Some(&base));
-        assert!(bytes.len() <= 23 + 7, "{}", bytes.len());
+        assert!(bytes.len() <= 27 + 7, "{}", bytes.len());
         let back = Snapshot::decode(&bytes, |t| (t == 10).then_some(&base)).unwrap();
         assert_eq!(back, moved);
     }

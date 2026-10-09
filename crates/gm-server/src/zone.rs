@@ -403,6 +403,8 @@ struct HubSlot {
     /// The stacks it carries, from the same reading (MODES.md 11.2): the firearms'
     /// reserves and the kits, and which item row each is, for the hub's books.
     stacks: Vec<StackReading>,
+    /// Its item bar, from the same reading (LOOK.md 3.2): the template on each cell.
+    bar: Vec<Option<String>>,
 }
 
 /// An invitation for a character that has no body here yet is kept this long (the
@@ -868,6 +870,7 @@ pub async fn run_with_web(
                                 gear: p.gear,
                                 templates: slot.worn.clone(),
                                 stacks: slot.stacks.clone(),
+                                bar: slot.bar.clone(),
                             };
                             gear_kept.insert(h.character, (reading, Instant::now()));
                         }
@@ -964,7 +967,7 @@ pub async fn run_with_web(
                             reading = kept;
                         }
                         zone.set_gear(id, reading.gear);
-                        zone.set_stacks(id, &stacks_of(&reading));
+                        zone.set_stacks(id, &stacks_of(&reading), &reading.bar);
                         // Its party (PARTY.md 4): the claim's reading, or a newer one the
                         // zone was told of before the body was here. The number its body
                         // carries follows before this tick is simulated, unless its
@@ -976,6 +979,7 @@ pub async fn run_with_web(
                                 gear_seq: reading.seq,
                                 worn: reading.templates.clone(),
                                 stacks: reading.stacks.clone(),
+                                bar: reading.bar.clone(),
                                 character: h.character,
                                 joined: Instant::now(),
                                 play_seconds_before: h.play_seconds,
@@ -1766,9 +1770,10 @@ pub async fn run_with_web(
                                         slot.gear_seq = reading.seq;
                                         slot.worn = reading.templates.clone();
                                         slot.stacks = reading.stacks.clone();
+                                        slot.bar = reading.bar.clone();
                                     }
                                     zone.set_gear(body, reading.gear);
-                                    zone.set_stacks(body, &stacks_of(reading));
+                                    zone.set_stacks(body, &stacks_of(reading), &reading.bar);
                                     info!(
                                         character,
                                         dealt = ?reading.gear.dealt,
@@ -2874,28 +2879,41 @@ pub async fn run_with_web(
                         );
                     }
                 }
-                ZoneEvent::KitUsed(id) => {
-                    // Said in the log (MODES.md 11.3): a reload is not, a kit is rarer
+                ZoneEvent::ItemUsed { id, cell } => {
+                    // One of the cell's stack (LOOK.md 3.2), by the bar the slot holds.
+                    // Said in the log (MODES.md 11.3): a reload is not, an item is rarer
                     // and what a player asks about.
-                    let kits = hub_slots.get(&id).map_or(0, |s| {
+                    let Some(template) = hub_slots
+                        .get(&id)
+                        .and_then(|s| s.bar.get(cell as usize).cloned().flatten())
+                    else {
+                        warn!(
+                            body = id,
+                            cell, "item used from a cell the bar has nothing on"
+                        );
+                        continue;
+                    };
+                    let left = hub_slots.get(&id).map_or(0, |s| {
                         s.stacks
                             .iter()
-                            .filter(|s| s.heals.is_some())
+                            .filter(|s| s.template == template)
                             .map(|s| s.quantity)
                             .sum::<u32>()
                     });
                     info!(
                         body = id,
                         character = hub_slots.get(&id).map(|s| s.character),
-                        left = kits.saturating_sub(1),
-                        "kit used"
+                        cell = cell + 1,
+                        template,
+                        left = left.saturating_sub(1),
+                        "item used"
                     );
                     consume_stack(
                         &cfg,
                         &mut hub_slots,
                         &event_tx,
                         id,
-                        |s| s.heals.is_some(),
+                        |s| s.template == template,
                         1,
                     );
                 }

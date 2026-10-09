@@ -769,7 +769,7 @@ async fn what_is_worn_is_the_hub_s_and_changes_through_the_zone() {
             both += 1;
         }
         let latest = readings.iter().max_by_key(|r| r.seq).unwrap();
-        let (_, held, _, _) = direct.gear(smith, &items).await.unwrap();
+        let (_, held, _, _, _) = direct.gear(smith, &items).await.unwrap();
         assert_eq!(
             latest.gear, held,
             "round {round}: the readings {readings:?} against what the hub holds"
@@ -954,8 +954,9 @@ async fn stacks_merge_to_the_cap_and_are_spent_through_the_zone() {
         "a stack of rounds says which gun it loads (MODES.md 10.2)"
     );
 
-    // The reading carries the stacks, as a zone takes them.
-    let (_, _, _, stacks) = direct.gear(smith, &items).await.unwrap();
+    // The reading carries the stacks, as a zone takes them, and the item bar (LOOK.md
+    // 3.2): never arranged, it is the kit on the first cell.
+    let (_, _, _, stacks, bar) = direct.gear(smith, &items).await.unwrap();
     let find = |stacks: &[gm_hub::economy::Stack], t: &str| {
         stacks
             .iter()
@@ -964,6 +965,109 @@ async fn stacks_merge_to_the_cap_and_are_spent_through_the_zone() {
     };
     assert_eq!(find(&stacks, "ball"), Some((25, None)));
     assert_eq!(find(&stacks, "kit"), Some((2, Some(300))));
+    let kit_first = vec![Some("kit".to_string()), None, None, None];
+    assert_eq!(bar, kit_first);
+    assert_eq!(
+        econ(&smith_conn, smith_s, smith, EconOp::Bar).await,
+        Ok(EconReply::Bar(kit_first.clone()))
+    );
+    let (_, _, _, _, bar) = direct.gear(other, &items).await.unwrap();
+    assert_eq!(bar, vec![None; 4], "nothing carried, nothing on the bar");
+    // Arranged by the player: kept as set, even for a stack not carried; gear is refused,
+    // and so is a bar of another size.
+    let arranged = vec![
+        None,
+        Some("kit".to_string()),
+        None,
+        Some("ball".to_string()),
+    ];
+    assert_eq!(
+        econ(
+            &smith_conn,
+            smith_s,
+            smith,
+            EconOp::SetBar {
+                cells: arranged.clone()
+            }
+        )
+        .await,
+        Ok(EconReply::Done)
+    );
+    assert_eq!(
+        econ(&smith_conn, smith_s, smith, EconOp::Bar).await,
+        Ok(EconReply::Bar(arranged.clone()))
+    );
+    let (_, _, _, _, bar) = direct.gear(smith, &items).await.unwrap();
+    assert_eq!(bar, arranged);
+    assert!(matches!(
+        econ(
+            &smith_conn,
+            smith_s,
+            smith,
+            EconOp::SetBar {
+                cells: vec![Some("sword".to_string()), None, None, None]
+            }
+        )
+        .await,
+        Err(HubError::Invalid(_))
+    ));
+    assert!(matches!(
+        econ(
+            &smith_conn,
+            smith_s,
+            smith,
+            EconOp::SetBar {
+                cells: vec![None, None, None]
+            }
+        )
+        .await,
+        Err(HubError::Invalid(_))
+    ));
+    assert!(
+        matches!(
+            econ(
+                &smith_conn,
+                smith_s,
+                smith,
+                EconOp::SetBar {
+                    cells: vec![Some("kit".to_string()), Some("kit".to_string()), None, None]
+                }
+            )
+            .await,
+            Err(HubError::Invalid(_))
+        ),
+        "a kind sits on one cell"
+    );
+    let cleared = vec![None; 4];
+    assert_eq!(
+        econ(
+            &smith_conn,
+            smith_s,
+            smith,
+            EconOp::SetBar {
+                cells: cleared.clone()
+            }
+        )
+        .await,
+        Ok(EconReply::Done)
+    );
+    assert_eq!(
+        econ(&smith_conn, smith_s, smith, EconOp::Bar).await,
+        Ok(EconReply::Bar(cleared)),
+        "an emptied bar stays empty: the default is for a bar never arranged"
+    );
+    assert_eq!(
+        econ(
+            &smith_conn,
+            smith_s,
+            smith,
+            EconOp::SetBar {
+                cells: kit_first.clone()
+            }
+        )
+        .await,
+        Ok(EconReply::Done)
+    );
 
     // The zone spent rounds: the hub follows and answers the reading after. More than is
     // carried: refused (logged), and the reading says what is.

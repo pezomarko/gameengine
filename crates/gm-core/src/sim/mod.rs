@@ -16,9 +16,9 @@ mod tests;
 
 pub use mover::{
     Action, CAST_ANIM_NONE, CREEP_SPEED, CROUCH_DROP, Company, Dash, GuardState, GunState, Input,
-    KitRefusal, Mover, Nearby, RUN_SPEED, SCOPED_CONE, Script, anim, buttons, capsule_at,
-    command_exit_ticks, cone_deg, kit_refusal, kit_use_ticks, melee_hit_point, move_share, sees,
-    step_mover, view_dir, yaw_toward,
+    ItemRefusal, Mover, Nearby, RUN_SPEED, SCOPED_CONE, Script, anim, bar_cell, buttons,
+    capsule_at, command_exit_ticks, cone_deg, item_refusal, kit_use_ticks, melee_hit_point,
+    move_share, sees, step_mover, view_dir, yaw_toward,
 };
 pub use zone::{
     Area, DOT_INTERVAL_TICKS, Driver, HEAD_BAND, History, HitKind, INSTANT_AREA_ECHO_MS,
@@ -57,6 +57,8 @@ pub const MAX_ABILITIES: usize = 12;
 pub const REGEN_PAUSE_MS: u32 = 1000;
 /// A kit's use, from the press to the heal (MODES.md 11.3).
 pub const KIT_USE_MS: u32 = 1500;
+/// The item bar's cells (LOOK.md 3.2): four, after the abilities.
+pub const BAR_CELLS: usize = 4;
 /// Standing up from the command stance takes this long (COMPANIONS.md 5.1).
 pub const COMMAND_EXIT_MS: u32 = 400;
 /// The team of creatures in a wild zone (COMPANIONS.md 3.1).

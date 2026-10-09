@@ -213,6 +213,36 @@ elemental):
 A cell is a button too: a click fires the ability as the key would, so a tablet has a way.
 Nothing here is a rule: the mover decides, the cell only shows what it will decide.
 
+**The item cells** (2026-10-08; the co-owner: "there should be an item bar now, not later.
+there will be more items"). After the abilities, a wider gap (14 dots) apart, **four cells
+for the stacks the character uses with a key** (MODES.md 11.3, ITEMS.md 1): on `F`, `8`,
+`9`, `0`, the keys free in every mode (the gun's weapons take `1`–`3` and its actives
+`4`–`7`, the RPG's kit `1`–`6`; `G` is the game master's page). `F` is the first cell's
+key, so `F` uses a kit as it always did: the kit sits there unless the player moves it.
+A cell holds a **template** (`kit`; a stack merges, so what is held is the kind, not a
+row): it shows the stack's icon (CONTENT.md 3; its name in small print while a stack has
+no icon), its key in a `hotbar_key` tab, and the count `×3` bottom right; while the use
+runs (1,500 ms) the same clockwise sweep as a cooldown; and it is drawn **bare** when the
+character carries none of its stack or nothing is set on it ("it should obviously be
+empty if there's nothing to use"). A press that uses nothing says why in yellow over the
+item cells for a second (MODES.md 11.3). A cell is a button for its key, like the
+abilities' (WEB.md 3.5). `app::item_cells` makes them; `--report` lists them after the
+abilities in `hotbar=` (`F:kit:ready:1.00`, `8:-:empty:1.00`; `using` while the sweep runs)
+and in `items=F:kit:3,8:-:0,...` (key, template, carried), with `item_refused=<words>`
+while a refusal shows.
+
+The arrangement is **the character's, kept by the hub** (ITEMS.md 4: `EconOp::Bar`,
+`SetBar`; `GearReading.bar` carries it to the zone with the gear) and made in the
+inventory (CLIENT.md 4.5, ITEMS.md 6.1): under the grid a row of the four cells as drop
+slots named `bar F`, `bar 8`, `bar 9`, `bar 0`; a stack dragged from the grid onto one
+sets it (and leaves the cell it sat on before: a kind sits on one cell, and the hub
+refuses it twice), a cell dragged onto another swaps the two, a cell dragged into the
+grid empties it (2.4's drag, the toolkit's own). A character that never arranged it has the first
+stack it carries that heals (the kit) on `F`. Using a cell: the input names it
+(PROTOCOL.md 4, `use_slot`), the zone counts the cell's stack from what the character
+carries and applies what the template does (`heals` for the kit; another effect in
+`items.toml` would be applied the same way), and tells the hub to consume one.
+
 ### 3.3 Above the hotbar: statuses
 
 The own statuses (the own block of every snapshot) as 24-dot icons with a ring of the time

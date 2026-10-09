@@ -50,6 +50,7 @@ fn bench(c: &mut Criterion) {
             ability: 0,
             held: 0,
             target: 0,
+            use_slot: 0,
         });
     }
     let ib = d.encode();

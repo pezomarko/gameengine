@@ -35,7 +35,6 @@ use crate::economy::{EconError, Economy, Outcome, TradeState, TradeStatus};
 use crate::models::{IngestMode, Models};
 use crate::party::{Answered, Parties};
 use gm_content::items::{ItemContent, Place};
-use gm_core::matrix::Gear;
 use gm_hub_proto::protocol::{TRADE_CANCELLED, TRADE_COMMITTED, TRADE_OPEN};
 
 /// The body of an upload must arrive within ten seconds plus its length at 64 KiB/s
@@ -1503,6 +1502,7 @@ async fn handle(
                     | EconOp::Craft { .. }
                     | EconOp::Decompose { .. }
                     | EconOp::TradeAccept { .. }
+                    | EconOp::SetBar { .. }
             );
             let trade = match &op {
                 EconOp::TradeAccept { trade, .. } => Some(*trade),
@@ -1885,13 +1885,12 @@ fn trade_offer(
 
 /// The hub's reading of a character's gear and stacks (ITEMS.md 3.3, MODES.md 11.2), as
 /// a zone is told it.
-fn reading(
-    (seq, gear, templates, stacks): (u64, Gear, [String; 2], Vec<crate::economy::Stack>),
-) -> GearReading {
+fn reading((seq, gear, templates, stacks, bar): crate::economy::Reading) -> GearReading {
     GearReading {
         seq,
         gear,
         templates,
+        bar,
         stacks: stacks
             .into_iter()
             .map(|s| StackReading {
@@ -1968,6 +1967,8 @@ async fn econ_op(
             .await
             .map(|h| holder_reply(items, &hub.cfg.content, &hands, h))
             .map_err(econ_err),
+        EconOp::Bar => e.bar(me).await.map(EconReply::Bar).map_err(econ_err),
+        EconOp::SetBar { cells } => done(e.set_bar(me, &cells).await),
         EconOp::Storage => e
             .storage(me)
             .await

@@ -661,8 +661,8 @@ pub fn own_state(p: &Player) -> OwnState {
     });
     OwnState {
         guns,
-        kits: p.mover.kits,
-        using_kit: p.mover.using_kit(now),
+        bar: p.mover.bar,
+        using: p.mover.using_item(now).map_or(0, |c| c + 1),
         stamina: p.mover.stamina.round().clamp(0.0, u16::MAX as f32) as u16,
         focus: p.mover.focus.round().clamp(0.0, u16::MAX as f32) as u16,
         statuses: p

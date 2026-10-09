@@ -587,6 +587,14 @@ pub type ItemId = i64;
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum EconOp {
     Inventory,
+    /// The item bar (LOOK.md 3.2, ITEMS.md 4): the template on each of the four cells, as
+    /// the character arranged it, or the default. v12.
+    Bar,
+    /// Arrange it: four cells, a stack template or nothing each; the character's zone is
+    /// told with its gear. v12.
+    SetBar {
+        cells: Vec<Option<String>>,
+    },
     Storage,
     StorageDeposit {
         item: ItemId,
@@ -846,6 +854,9 @@ pub struct GearReading {
     /// The stacks in the inventory (MODES.md 11.2): a firearm's reserve is the quantity of
     /// the one its `ammo` names, the kits are the ones that heal. v11.
     pub stacks: Vec<StackReading>,
+    /// The item bar (LOOK.md 3.2): the template key set on each of the four cells, or
+    /// nothing. The zone counts a cell's stack from `stacks`. v12.
+    pub bar: Vec<Option<String>>,
 }
 
 /// One stack of a character's inventory, as the zone reads it.
@@ -974,6 +985,8 @@ pub struct TradeOffer {
 pub enum EconReply {
     Done,
     Id(i64),
+    /// The item bar's four cells (`EconOp::Bar`). v12.
+    Bar(Vec<Option<String>>),
     Ids(Vec<i64>),
     Holder {
         coin: i64,
@@ -1210,7 +1223,7 @@ pub const MAX_SESSIONS_PER_ACCOUNT: usize = 8;
 /// carry); any change to them is a new one. A stream that speaks them begins with it, in
 /// a frame of one byte, and the hub answers with its own before anything else: zones,
 /// tools and bots of another build are told so instead of being garbled at.
-pub const HUB_VERSION: u8 = 11;
+pub const HUB_VERSION: u8 = 12;
 pub const HUB_PREAMBLE: [u8; 3] = [0, 1, HUB_VERSION];
 pub const HUB_BIDI_STREAMS: u32 = 1024;
 /// Password hashes running at once; more answer `Busy`.

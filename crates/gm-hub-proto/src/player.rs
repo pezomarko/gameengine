@@ -21,7 +21,7 @@ use crate::protocol::{
 
 /// The version of the players' messages; any change to them, or to a type they carry, is
 /// a new one.
-pub const PLAYER_VERSION: u8 = 6;
+pub const PLAYER_VERSION: u8 = 7;
 
 /// What a stream that speaks the players' messages begins with: the empty frame, then
 /// the version in a frame of its own.
@@ -90,6 +90,12 @@ pub enum PlayerRequest {
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum PlayerEcon {
     Inventory,
+    /// The item bar (LOOK.md 3.2): the four cells' templates. v7.
+    Bar,
+    /// Arrange the item bar: four cells, a stack template or nothing each. v7.
+    SetBar {
+        cells: Vec<Option<String>>,
+    },
     /// The account's storage, and an item into it or out of it.
     Storage,
     StorageDeposit {
@@ -179,6 +185,8 @@ pub struct HireRow {
 pub enum PlayerEconReply {
     Done,
     Id(i64),
+    /// The item bar's four cells. v7.
+    Bar(Vec<Option<String>>),
     Holder {
         coin: i64,
         items: Vec<ItemSummary>,
@@ -210,6 +218,8 @@ impl From<PlayerEcon> for EconOp {
     fn from(op: PlayerEcon) -> EconOp {
         match op {
             PlayerEcon::Inventory => EconOp::Inventory,
+            PlayerEcon::Bar => EconOp::Bar,
+            PlayerEcon::SetBar { cells } => EconOp::SetBar { cells },
             PlayerEcon::Storage => EconOp::Storage,
             PlayerEcon::StorageDeposit { item } => EconOp::StorageDeposit { item },
             PlayerEcon::StorageWithdraw { item } => EconOp::StorageWithdraw { item },
@@ -240,6 +250,7 @@ impl TryFrom<EconReply> for PlayerEconReply {
         Ok(match reply {
             EconReply::Done => PlayerEconReply::Done,
             EconReply::Id(id) => PlayerEconReply::Id(id),
+            EconReply::Bar(cells) => PlayerEconReply::Bar(cells),
             EconReply::Holder { coin, items } => PlayerEconReply::Holder { coin, items },
             EconReply::Listings {
                 owner,

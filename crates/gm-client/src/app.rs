@@ -206,9 +206,14 @@ pub(crate) struct Online {
     /// from the zone's `Welcome` on the zone's (once that map is here).
     map_hash: u64,
     respec_note: String,
-    /// Why the last press of `F` used no kit, and when (MODES.md 11.3): the HUD says it in
-    /// yellow for `KIT_NOTE_SECS` where the kits are counted.
+    /// Why the last press of an item key used nothing, and when (MODES.md 11.3): the HUD
+    /// says it in yellow for `KIT_NOTE_SECS` over the item cells.
     kit_note: Option<(Instant, &'static str)>,
+    /// The item bar (LOOK.md 3.2): the template on each cell, as the hub holds it; asked
+    /// when the zone's content arrives and whenever the inventory changed it.
+    bar: Vec<Option<String>>,
+    bar_wanted: bool,
+    bar_ask: Option<crate::hub::Pending<crate::hub::Answer>>,
     /// A travel ticket to act on: reconnect to another zone, reloading its map.
     pending_travel: Option<(String, ZoneAddr, Vec<u8>)>,
     zone_name: String,
@@ -313,11 +318,14 @@ impl Input {
         gun: bool,
         rpg: Option<crate::rpg::RpgFrame>,
     ) -> SimInput {
-        // `F` uses a kit in every mode (MODES.md 11.3): read before the modes part.
-        let kit = if self.just_pressed.contains(&KeyCode::KeyF) {
-            buttons::USE
-        } else {
-            0
+        // The item bar's keys (LOOK.md 3.2, MODES.md 11.3) use a cell in every mode: read
+        // before the modes part. `F` is the first cell's, the kit's by default.
+        let (kit, use_slot) = match BAR_KEY_CODES
+            .iter()
+            .position(|k| self.just_pressed.contains(k))
+        {
+            Some(i) => (buttons::USE, i as u8 + 1),
+            None => (0, 0),
         };
         // The RPG mode (MODES.md 5.5): `1` the primary, `2` the secondary, `3`–`6` the
         // actives, Shift guards, Space jumps; the axes are the walk's when none is held.
@@ -339,6 +347,7 @@ impl Input {
                 ability: r.ability,
                 held: 0,
                 target: r.target,
+                use_slot,
             };
         }
         let (mut forward, mut side) = self.axes();
@@ -419,6 +428,7 @@ impl Input {
             forward,
             side,
             ability,
+            use_slot,
             held: if gun { self.held } else { 0 },
             target: 0,
         }
@@ -686,6 +696,9 @@ fn online(opts: &Options, sim: &Sim, map_hash: u64, entry: Entry) -> Result<Onli
         map_hash,
         respec_note: String::new(),
         kit_note: None,
+        bar: vec![None; gm_core::sim::BAR_CELLS],
+        bar_wanted: false,
+        bar_ask: None,
         pending_travel: None,
         zone_name: entry.zone_name,
         backlog: VecDeque::new(),
@@ -827,15 +840,10 @@ fn reload_progress(c: &gm_net::client::ClientState) -> f32 {
     (1.0 - left / f.reload.max(1) as f32).clamp(0.0, 1.0)
 }
 
-/// How far along a kit's use is (MODES.md 11.3), 0 when none: the view model is lowered
-/// and worked as for a reload.
+/// How far along an item's use is (MODES.md 11.3), 0 when none: the view model is
+/// lowered and worked as for a reload.
 fn kit_progress(c: &gm_net::client::ClientState) -> f32 {
-    let Some(until) = c.mover.kit_until else {
-        return 0.0;
-    };
-    let whole = TickRate::COMBAT.ms_to_ticks(gm_core::sim::KIT_USE_MS);
-    let left = gm_core::sim::tick_delta(until, c.tick).max(0) as f32;
-    (1.0 - left / whole.max(1) as f32).clamp(0.0, 1.0)
+    c.mover.use_progress(c.tick, c.rate.dt()).unwrap_or(0.0)
 }
 
 fn app(opts: Options, bsp: Bsp, palette: world::Palette, sim: Sim, start: Start) -> App {
@@ -1472,6 +1480,7 @@ fn fight_input(eye: Vec3, target: Option<(Vec3, Vec3)>, sim: &mut Sim, tick: u32
         ability: 0,
         held: 0,
         target: 0,
+        use_slot: 0,
     };
     match target {
         Some((at, velocity)) => {
@@ -1661,6 +1670,9 @@ pub(crate) struct HotbarCell {
     pub left_secs: f32,
     /// The stage a chain's window has reached (MODES.md 4.3): 0 outside one, else 2, 3...
     pub stage: u8,
+    /// An item cell (LOOK.md 3.2): how many of its stack are carried; `None` for an
+    /// ability's cell.
+    pub count: Option<u16>,
 }
 
 /// The other bodies as the RPG mode reads them (MODES.md 5): where they stand now, their
@@ -1701,42 +1713,56 @@ pub(crate) fn dodge_slot(
     })
 }
 
-/// How long the HUD says why a press of `F` used no kit (MODES.md 11.3).
+/// How long the HUD says why a press of an item key used nothing (MODES.md 11.3).
 const KIT_NOTE_SECS: f32 = 1.0;
 /// The zone's own refusal of a kit (MODES.md 11.3), in the HUD's words.
 const KIT_FULL: &str = "at full health";
+/// The item bar's keys (LOOK.md 3.2), a cell each: free in every mode (the gun's weapons
+/// take `1`–`3` and its actives `4`–`7`, the RPG's kit `1`–`6`). `F` is the first cell's,
+/// so `F` uses a kit as it always did, the kit sitting there unless moved.
+pub(crate) const BAR_KEYS: [&str; gm_core::sim::BAR_CELLS] = ["F", "8", "9", "0"];
+const BAR_KEY_CODES: [KeyCode; gm_core::sim::BAR_CELLS] = [
+    KeyCode::KeyF,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+    KeyCode::Digit0,
+];
 
-/// The kit as the HUD shows it (MODES.md 11.3) and `--report` says it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KitState {
-    /// A use under way: "using a kit".
-    Using,
-    /// The last press was refused, within `KIT_NOTE_SECS`: its words.
-    Refused(&'static str),
-    /// Kits carried: "kits N  F".
-    Ready,
-    /// None carried: the same, dim.
-    None,
+/// The refusal the item cells show (MODES.md 11.3): the last press's words, within
+/// `KIT_NOTE_SECS` of it.
+fn kit_note_of(note: Option<(Instant, &'static str)>) -> Option<&'static str> {
+    note.filter(|(at, _)| at.elapsed().as_secs_f32() < KIT_NOTE_SECS)
+        .map(|(_, why)| why)
 }
 
-fn kit_state(o: &Online, c: &ClientState) -> KitState {
-    kit_state_of(c.mover.using_kit(c.tick), c.mover.kits, o.kit_note)
-}
-
-/// A use under way outranks a refusal's words (a press at full health begins one the
-/// zone clears: the words stay); a refusal is told for `KIT_NOTE_SECS` from the press.
-fn kit_state_of(using: bool, kits: u16, note: Option<(Instant, &'static str)>) -> KitState {
-    if let Some((at, why)) = note
-        && at.elapsed().as_secs_f32() < KIT_NOTE_SECS
-    {
-        KitState::Refused(why)
-    } else if using {
-        KitState::Using
-    } else if kits > 0 {
-        KitState::Ready
-    } else {
-        KitState::None
-    }
+/// An item cell of the hotbar (LOOK.md 3.2): its key, what is set on it, how many are
+/// carried, and its state: `using` (the sweep runs), `ready`, `empty` (nothing set, or
+/// none carried: the cell is drawn bare).
+fn item_cells(o: &Online, c: &ClientState) -> Vec<HotbarCell> {
+    let using = c.mover.using_item(c.tick);
+    let progress = c.mover.use_progress(c.tick, c.rate.dt()).unwrap_or(1.0);
+    (0..gm_core::sim::BAR_CELLS)
+        .map(|i| {
+            let template = o.bar.get(i).cloned().flatten();
+            let count = c.mover.bar[i];
+            let (state, ready) = if using == Some(i as u8) {
+                ("using", progress)
+            } else if template.is_some() && count > 0 {
+                ("ready", 1.0)
+            } else {
+                ("empty", 1.0)
+            };
+            HotbarCell {
+                key: BAR_KEYS[i],
+                ability: template.unwrap_or_else(|| "-".to_string()),
+                state,
+                ready,
+                left_secs: 0.0,
+                stage: 0,
+                count: Some(count),
+            }
+        })
+        .collect()
 }
 
 /// The hotbar's cells for the own body: what each key does and its state now.
@@ -1804,6 +1830,7 @@ pub(crate) fn hotbar(o: &Online) -> Vec<HotbarCell> {
             ready,
             left_secs: left * c.rate.dt(),
             stage,
+            count: None,
         });
     };
     if kit.mode == gm_core::vocab::Mode::Gun {
@@ -1827,6 +1854,7 @@ pub(crate) fn hotbar(o: &Online) -> Vec<HotbarCell> {
         {
             held.state = "active";
         }
+        cells.extend(item_cells(o, c));
         return cells;
     }
     // The RPG mode's keys (MODES.md 5.5): the kit on 1 to 6, the guard on Shift.
@@ -1846,6 +1874,7 @@ pub(crate) fn hotbar(o: &Online) -> Vec<HotbarCell> {
             build.actives.get(i).copied(),
         );
     }
+    cells.extend(item_cells(o, c));
     cells
 }
 
@@ -1862,15 +1891,28 @@ fn frame_size(window: &Window) -> winit::dpi::PhysicalSize<u32> {
     window.inner_size()
 }
 
-/// The hotbar's cells (LOOK.md 3.2): `n` squares of 40 dots, 3 apart, bottom centre.
-pub(crate) fn hotbar_rects(size: (f32, f32), s: f32, n: usize) -> Vec<ui::Rect> {
+/// The hotbar's cells (LOOK.md 3.2): `n` squares of 40 dots, 3 apart, bottom centre, the
+/// last `items` of them (the item cells) a wider gap after the abilities.
+pub(crate) fn hotbar_rects(size: (f32, f32), s: f32, n: usize, items: usize) -> Vec<ui::Rect> {
     let side = 40.0 * s;
     let gap = 3.0 * s;
-    let total = n as f32 * (side + gap) - gap;
+    let wide = 14.0 * s;
+    let abilities = n.saturating_sub(items);
+    let mut total = n as f32 * (side + gap) - gap;
+    if abilities > 0 && items > 0 {
+        total += wide;
+    }
     let x0 = ((size.0 - total) * 0.5).round();
     let y0 = size.1 - 16.0 - side;
     (0..n)
-        .map(|i| ui::Rect::new(x0 + i as f32 * (side + gap), y0, side, side))
+        .map(|i| {
+            let shift = if i >= abilities && abilities > 0 {
+                wide
+            } else {
+                0.0
+            };
+            ui::Rect::new(x0 + i as f32 * (side + gap) + shift, y0, side, side)
+        })
         .collect()
 }
 
@@ -1909,8 +1951,12 @@ pub(crate) fn touch_controls(
         ));
     }
     if let Some(o) = online {
-        let n = hotbar(o).len();
-        for (i, r) in hotbar_rects(size, s, n).into_iter().enumerate() {
+        let cells = hotbar(o);
+        let items = cells.iter().filter(|c| c.count.is_some()).count();
+        for (i, r) in hotbar_rects(size, s, cells.len(), items)
+            .into_iter()
+            .enumerate()
+        {
             out.push((TouchButton::Hot(i as u8), r));
         }
     }
@@ -2158,27 +2204,6 @@ pub(crate) fn build_hud(hud: &mut Hud, online: Option<&Online>, vp: glam::Mat4, 
             hud.label(w - 16.0 - tw, y - line, s, hud::YELLOW, word);
         }
     }
-    // The kits carried (MODES.md 11.3), bottom right in every mode, above the ammo where
-    // there is ammo: `F` uses one; "using a kit" while the hands are at it.
-    {
-        let gun = c.mover.gun_in_hand(&c.sheet.kit).is_some();
-        let base = h
-            - 16.0
-            - line
-            - if gun {
-                cap * s * 2.0 + line * 2.0
-            } else {
-                line
-            };
-        let (text, ink) = match kit_state(o, c) {
-            KitState::Using => ("using a kit".to_string(), hud::YELLOW),
-            KitState::Refused(why) => (why.to_string(), hud::YELLOW),
-            KitState::Ready => (format!("kits {}  F", c.mover.kits), hud::WHITE),
-            KitState::None => ("kits 0  F".to_string(), hud::SHADE),
-        };
-        let tw = hud.width(s, &text);
-        hud.label(w - 16.0 - tw, base, s, ink, &text);
-    }
 
     // The own body, top left (LOOK.md 3.1): a portrait in its frame, the name, the three
     // bars; without a skin, the bars alone as before, bottom left.
@@ -2283,9 +2308,9 @@ pub(crate) fn build_hud(hud: &mut Hud, online: Option<&Online>, vp: glam::Mat4, 
     // its glyph, its key, and its state from the predicted mover; the own statuses above it.
     if skinned {
         let cells = hotbar(o);
-        let rects = hotbar_rects((w, h), s, cells.len());
+        let items = cells.iter().filter(|c| c.count.is_some()).count();
+        let rects = hotbar_rects((w, h), s, cells.len(), items);
         let side = 40.0 * s;
-        let gap = 3.0 * s;
         let (x0, y0) = rects.first().map_or((0.0, h - 16.0 - side), |r| (r.x, r.y));
         // The cells without a picture show their ability's name (LOOK.md 3.4), whole and
         // all in one size: small print when any of them is wider than a cell.
@@ -2296,8 +2321,67 @@ pub(crate) fn build_hud(hud: &mut Hud, online: Option<&Online>, vp: glam::Mat4, 
             (s * 0.5).max(1.0)
         };
         for (i, cell) in cells.iter().enumerate() {
-            let x = x0 + i as f32 * (side + gap);
+            let x = rects.get(i).map_or(x0, |r| r.x);
             hud.frame(x, y0, side, side, "hotbar_cell", s, hud::PLAIN);
+            // An item cell (LOOK.md 3.2): its stack's icon or name and the count; bare
+            // when nothing is set on it or none is carried, and the sweep while it is
+            // used.
+            if let Some(count) = cell.count {
+                if cell.state != "empty" {
+                    let icon = manifest
+                        .and_then(|m| m.template(&cell.ability))
+                        .and_then(|t| t.icon.clone());
+                    let inner = side - 8.0 * s;
+                    let drawn = icon
+                        .as_deref()
+                        .is_some_and(|k| hud.icon(x + 4.0 * s, y0 + 4.0 * s, inner, k, hud::PLAIN));
+                    if !drawn {
+                        let print = (s * 0.5).max(1.0);
+                        let mut short = cell.ability.clone();
+                        while hud.width(print, &short) > inner && short.pop().is_some() {}
+                        let tw = hud.width(print, &short);
+                        hud.print(
+                            x + (side - tw) * 0.5,
+                            y0 + (side - cap * print) * 0.5 - 3.0 * s,
+                            print,
+                            hud::WHITE,
+                            &short,
+                        );
+                    }
+                    let n = format!("×{count}");
+                    let tw = hud.width(s, &n);
+                    hud.print(
+                        x + side - tw - 3.0 * s + 1.0,
+                        y0 + side - (cap + 2.0) * s + 1.0,
+                        s,
+                        hud::SHADE,
+                        &n,
+                    );
+                    hud.print(
+                        x + side - tw - 3.0 * s,
+                        y0 + side - (cap + 2.0) * s,
+                        s,
+                        hud::WHITE,
+                        &n,
+                    );
+                    if cell.state == "using" {
+                        let centre = Vec2::new(x + side * 0.5, y0 + side * 0.5);
+                        hud.wedge(centre, side * 0.72, cell.ready, 1.0, [0.0, 0.0, 0.0, 0.62]);
+                    }
+                }
+                let kw = hud.width(s, cell.key) + 4.0 * s;
+                hud.frame(
+                    x - s,
+                    y0 - 4.0 * s,
+                    kw,
+                    (cap + 4.0) * s,
+                    "hotbar_key",
+                    s,
+                    hud::PLAIN,
+                );
+                hud.print(x + s, y0 - 2.0 * s, s, hud::WHITE, cell.key);
+                continue;
+            }
             let icon = manifest
                 .and_then(|m| m.ability(&cell.ability))
                 .and_then(|a| a.icon.clone());
@@ -2389,6 +2473,22 @@ pub(crate) fn build_hud(hud: &mut Hud, online: Option<&Online>, vp: glam::Mat4, 
                 hud::PLAIN,
             );
             hud.print(x + s, y0 - 2.0 * s, s, hud::WHITE, cell.key);
+        }
+        // Why the last press of an item key used nothing (MODES.md 11.3): in yellow over
+        // the item cells for a second.
+        if let Some(why) = kit_note_of(o.kit_note)
+            && let Some(first) = rects.get(cells.len().saturating_sub(items))
+        {
+            let last = rects.last().unwrap_or(first);
+            let mid = (first.x + last.x + last.w) * 0.5;
+            let tw = hud.width(s, why);
+            hud.label(
+                (mid - tw * 0.5).round(),
+                y0 - (cap + 4.0) * s - line,
+                s,
+                hud::YELLOW,
+                why,
+            );
         }
         // The statuses (LOOK.md 3.3), above the hotbar: an icon or the status's name, a
         // ring of the time left as a wedge, the stacks.
@@ -2943,8 +3043,8 @@ impl App {
             Key::Use => self.open_stall(),
             Key::Gm => self.open_gm(),
             Key::Character => self.open_character(),
-            // A script's `F` (CLIENT.md 9): the kit, as a person's key is (MODES.md 11.3);
-            // a frame's press, let go the same frame.
+            // A script's `F` (CLIENT.md 9): the first item cell, the kit's, as a person's
+            // key is (MODES.md 11.3); a frame's press, let go the same frame.
             Key::Kit if self.online.is_some() => {
                 self.input.just_pressed.insert(KeyCode::KeyF);
             }
@@ -3701,6 +3801,7 @@ impl App {
                             }
                         }
                         o.pack = Some(pack);
+                        o.bar_wanted = true;
                     }
                     FromZone::Gm(news) => match news {
                         GmNews::Granted => {
@@ -4208,17 +4309,19 @@ impl App {
             } else {
                 self.input.sim_input(yaw, pitch, dodge, gun, rpg_frame)
             };
-            // A press of `F` that begins no kit is said why (MODES.md 11.3): what the
-            // predicted body knows (no kit, the air, the hands, a stagger), else the
-            // health, which the zone refuses the same tick.
-            if input.buttons & buttons::USE != 0 {
+            // A press of an item key that begins no use is said why (MODES.md 11.3):
+            // what the predicted body knows (an empty cell, the air, the hands, a
+            // stagger), else the health, which the zone refuses the same tick.
+            if input.buttons & buttons::USE != 0
+                && let Some(cell) = gm_core::sim::bar_cell(input.use_slot)
+            {
                 let m = &c.mover;
                 let staggered = m.statuses.staggered() || m.statuses.downed();
-                let why = gm_core::sim::kit_refusal(m, c.tick, staggered)
-                    .map(gm_core::sim::KitRefusal::word)
+                let why = gm_core::sim::item_refusal(m, cell, c.tick, staggered)
+                    .map(gm_core::sim::ItemRefusal::word)
                     .or_else(|| (c.own_health >= c.sheet.derived.health).then_some(KIT_FULL));
                 if let Some(why) = why {
-                    log::info!("kit: {why}");
+                    log::info!("item {}: {why}", BAR_KEYS[cell]);
                     o.kit_note = Some((Instant::now(), why));
                 }
             }
@@ -5012,6 +5115,12 @@ impl App {
                     Some("RMB") => {
                         self.input.mouse.remove(&MouseButton::Right);
                     }
+                    // An item cell (LOOK.md 3.2): its key.
+                    Some(k) if BAR_KEYS.contains(&k) => {
+                        if let Some(i) = BAR_KEYS.iter().position(|b| *b == k) {
+                            self.hold_key(BAR_KEY_CODES[i], down);
+                        }
+                    }
                     Some(k) => {
                         let digits = [
                             KeyCode::Digit1,
@@ -5307,14 +5416,17 @@ impl App {
             }
             // The kits and their state (MODES.md 11.3): `ready`, `none`, `using`, or the
             // refusal's words with dashes for spaces.
+            // The item cells (LOOK.md 3.2): key, what is set, how many carried; and the
+            // last refusal's words with dashes for spaces, while they show.
             if let Some(c) = &o.client {
-                let state = match kit_state(o, c) {
-                    KitState::Using => "using".to_string(),
-                    KitState::Ready => "ready".to_string(),
-                    KitState::None => "none".to_string(),
-                    KitState::Refused(why) => why.replace(' ', "-"),
-                };
-                line.push_str(&format!(" kit={}:{state}", c.mover.kits));
+                let items: Vec<String> = item_cells(o, c)
+                    .iter()
+                    .map(|i| format!("{}:{}:{}", i.key, i.ability, i.count.unwrap_or(0)))
+                    .collect();
+                line.push_str(&format!(" items={}", items.join(",")));
+                if let Some(why) = kit_note_of(o.kit_note) {
+                    line.push_str(&format!(" item_refused={}", why.replace(' ', "-")));
+                }
             }
             let held: Vec<String> = o
                 .looks
@@ -5372,7 +5484,40 @@ impl App {
         line
     }
 
+    /// The item bar (LOOK.md 3.2): asked of the hub once the zone's content is here, and
+    /// taken from the inventory screen while it is up (a drag there arranges it).
+    fn poll_bar(&mut self) {
+        let wanted = self.online.as_ref().is_some_and(|o| o.bar_wanted);
+        if wanted && let Some((hub, session, character)) = self.owner() {
+            let ask = hub.call(PlayerRequest::Econ {
+                session,
+                character,
+                op: gm_hub_proto::player::PlayerEcon::Bar,
+            });
+            if let Some(o) = &mut self.online {
+                o.bar_wanted = false;
+                o.bar_ask = Some(ask);
+            }
+        }
+        let Some(o) = &mut self.online else { return };
+        if let Some(answer) = o.bar_ask.as_ref().and_then(|p| p.take()) {
+            o.bar_ask = None;
+            match answer {
+                Ok(gm_hub_proto::player::PlayerResponse::Econ(
+                    gm_hub_proto::player::PlayerEconReply::Bar(cells),
+                )) => o.bar = cells,
+                other => log::warn!("the item bar was not read: {other:?}"),
+            }
+        }
+        if let Some(cells) = self.bag.as_ref().and_then(|b| b.bar())
+            && cells != o.bar.as_slice()
+        {
+            o.bar = cells.to_vec();
+        }
+    }
+
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
+        self.poll_bar();
         #[cfg(target_arch = "wasm32")]
         if self.active.is_none() {
             let made = self.pending_gpu.borrow_mut().take();
@@ -6630,9 +6775,10 @@ mod kit_tests {
     use super::*;
     use gm_core::sim::buttons;
 
-    /// MODES.md 11.3: `F` uses a kit in every mode. The press is sampled per tick from
-    /// the keys pressed since the last one; the RPG mode builds its frame another way and
-    /// must still read it.
+    /// MODES.md 11.3, LOOK.md 3.2: `F` uses a kit in every mode (the first item cell's
+    /// key), and `8`, `9`, `0` the other cells. The press is sampled per tick from the
+    /// keys pressed since the last one; the RPG mode builds its frame another way and
+    /// must still read them.
     #[test]
     fn f_is_the_kit_in_every_mode() {
         let modes: [(&str, bool, Option<crate::rpg::RpgFrame>); 3] = [
@@ -6641,50 +6787,71 @@ mod kit_tests {
             ("rpg", false, Some(crate::rpg::RpgFrame::default())),
         ];
         for (mode, gun, rpg) in modes {
-            let mut input = Input::default();
-            input.keys.insert(KeyCode::KeyF);
-            input.just_pressed.insert(KeyCode::KeyF);
-            let first = input.sim_input(0.0, 0.0, None, gun, rpg);
-            assert!(
-                first.buttons & buttons::USE != 0,
-                "{mode}: F just pressed is USE"
-            );
-            // Held on, it is pressed once: the next tick carries it no more.
-            let second = input.sim_input(0.0, 0.0, None, gun, rpg);
-            assert!(
-                second.buttons & buttons::USE == 0,
-                "{mode}: F held is not pressed again"
-            );
+            for (i, key) in BAR_KEY_CODES.iter().enumerate() {
+                let mut input = Input::default();
+                input.keys.insert(*key);
+                input.just_pressed.insert(*key);
+                let first = input.sim_input(0.0, 0.0, None, gun, rpg);
+                assert!(
+                    first.buttons & buttons::USE != 0,
+                    "{mode}: {} just pressed is USE",
+                    BAR_KEYS[i]
+                );
+                assert_eq!(
+                    first.use_slot,
+                    i as u8 + 1,
+                    "{mode}: the cell of {}",
+                    BAR_KEYS[i]
+                );
+                // Held on, it is pressed once: the next tick carries it no more.
+                let second = input.sim_input(0.0, 0.0, None, gun, rpg);
+                assert!(
+                    second.buttons & buttons::USE == 0 && second.use_slot == 0,
+                    "{mode}: {} held is not pressed again",
+                    BAR_KEYS[i]
+                );
+            }
         }
     }
 
-    /// MODES.md 11.3: the HUD counts the kits, says "using a kit" while the hands are at
-    /// it, and for a second why a press used none; dim at none.
+    /// MODES.md 11.3: the item cells say for a second why a press used nothing.
     #[test]
     fn the_hud_says_why_a_kit_was_refused_for_a_second() {
         let now = Instant::now();
         let ago = now - std::time::Duration::from_secs_f32(KIT_NOTE_SECS + 0.1);
-        assert_eq!(kit_state_of(false, 3, None), KitState::Ready);
-        assert_eq!(kit_state_of(false, 0, None), KitState::None);
-        assert_eq!(kit_state_of(true, 3, None), KitState::Using);
+        assert_eq!(kit_note_of(None), None);
         for why in [
             KIT_FULL,
-            gm_core::sim::KitRefusal::InTheAir.word(),
-            gm_core::sim::KitRefusal::HandsBusy.word(),
-            gm_core::sim::KitRefusal::NoKit.word(),
+            gm_core::sim::ItemRefusal::InTheAir.word(),
+            gm_core::sim::ItemRefusal::HandsBusy.word(),
+            gm_core::sim::ItemRefusal::Empty.word(),
         ] {
-            assert_eq!(
-                kit_state_of(false, 3, Some((now, why))),
-                KitState::Refused(why)
-            );
-            // A press at full health begins a use the zone clears: the words win.
-            assert_eq!(
-                kit_state_of(true, 3, Some((now, why))),
-                KitState::Refused(why)
-            );
-            assert_eq!(kit_state_of(false, 3, Some((ago, why))), KitState::Ready);
-            assert_eq!(kit_state_of(false, 0, Some((ago, why))), KitState::None);
+            assert_eq!(kit_note_of(Some((now, why))), Some(why));
+            assert_eq!(kit_note_of(Some((ago, why))), None);
         }
         assert_eq!(KIT_FULL, "at full health");
+    }
+
+    /// LOOK.md 3.2: the item cells sit after the abilities, a wider gap between, and the
+    /// bar as a whole stays centred.
+    #[test]
+    fn the_item_cells_follow_the_abilities_a_gap_apart() {
+        let s = 2.0;
+        let rects = hotbar_rects((1280.0, 720.0), s, 7 + 4, 4);
+        assert_eq!(rects.len(), 11);
+        let step = rects[1].x - rects[0].x;
+        assert_eq!(step, 43.0 * s);
+        assert_eq!(
+            rects[7].x - rects[6].x,
+            step + 14.0 * s,
+            "the gap before the items"
+        );
+        assert_eq!(rects[8].x - rects[7].x, step);
+        let left = rects[0].x;
+        let right = 1280.0 - (rects[10].x + rects[10].w);
+        assert!((left - right).abs() <= 1.0, "{left} vs {right}");
+        // Without items, as before.
+        let plain = hotbar_rects((1280.0, 720.0), s, 7, 0);
+        assert_eq!(plain[6].x - plain[5].x, step);
     }
 }

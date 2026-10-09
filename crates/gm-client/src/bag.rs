@@ -155,6 +155,8 @@ enum List {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ask {
     Read(List),
+    /// The item bar (LOOK.md 3.2): the four cells' templates.
+    Bar,
     /// Something that changes what is where; what to say when it is done.
     Change(&'static str),
 }
@@ -242,6 +244,11 @@ pub struct Bag {
     buying: Asked,
     wearing: Asked,
     now: Instant,
+    /// The item bar (LOOK.md 3.2, ITEMS.md 4): the template on each cell; `None` until
+    /// the hub has said. Shown as a row of slots under the grid; a stack dragged onto one
+    /// sets it, a cell dragged into the grid empties it, two cells swap.
+    bar: Option<Vec<Option<String>>>,
+    bar_filled: u32,
 }
 
 /// Silver as a person reads it (ECONOMY.md 2): its units, the largest first, each in its
@@ -379,7 +386,14 @@ impl Bag {
             buying: Asked::default(),
             wearing: Asked::default(),
             now,
+            bar: None,
+            bar_filled: 0,
         }
+    }
+
+    /// The item bar as this screen last heard it from the hub (LOOK.md 3.2), for the HUD.
+    pub fn bar(&self) -> Option<&[Option<String>]> {
+        self.bar.as_deref()
     }
 
     /// The inventory of the character being played.
@@ -391,6 +405,7 @@ impl Bag {
     ) -> Bag {
         let mut bag = Bag::new(Page::Inventory, session, character, now);
         bag.read(hub, List::Inventory);
+        bag.ask(hub, Ask::Bar, PlayerEcon::Bar);
         bag
     }
 
@@ -441,6 +456,9 @@ impl Bag {
     fn refresh(&mut self, hub: &dyn HubApi) {
         self.read(hub, List::Stall);
         self.read(hub, List::Inventory);
+        if self.page == Page::Inventory {
+            self.ask(hub, Ask::Bar, PlayerEcon::Bar);
+        }
         if self.stored.is_some() || self.page == Page::Storage {
             self.read(hub, List::Storage);
         }
@@ -539,6 +557,18 @@ impl Bag {
                     }
                 }
                 (Ask::Read(list), Ok(_)) => self.old[list as usize] = true,
+                (Ask::Bar, Ok(PlayerResponse::Econ(PlayerEconReply::Bar(cells)))) => {
+                    if serial >= self.bar_filled {
+                        self.bar_filled = serial;
+                        self.bar = Some(cells);
+                    }
+                }
+                (Ask::Bar, Ok(_)) => self.say("the hub answered something else", true),
+                (Ask::Bar, Err(e)) => {
+                    if self.notice.is_empty() {
+                        self.say(Self::words(&e), true);
+                    }
+                }
                 (
                     Ask::Change(done),
                     Ok(PlayerResponse::Econ(PlayerEconReply::Done | PlayerEconReply::Id(_))),
@@ -791,7 +821,9 @@ impl Bag {
         let side = ui.slot_side();
         let cols = 6usize;
         let grid_h = 4.0 * side + 3.0 * 2.0 * s;
-        let inner = line + gap + grid_h + gap + 3.0 * line + gap + 2.0 * line + gap + h;
+        let bar_h = side + line;
+        let inner =
+            line + gap + grid_h + gap + bar_h + gap + 3.0 * line + gap + 2.0 * line + gap + h;
         let panel = Rect::centred(ui.size(), PANEL_UNITS * s, ui.panel_height(inner, true));
         let inner = ui.panel(panel, "inventory");
         let mut col = Column::new(inner, gap);
@@ -845,6 +877,95 @@ impl Bag {
         let dropped_on_weapon = ui.drop_slot(weapon_slot, "weapon", wt.as_ref(), &tip);
         let dropped_on_armour = ui.drop_slot(armour_slot, "armour", at.as_ref(), &tip);
         let dropped_in_grid = ui.dropped("items");
+        // The item bar (LOOK.md 3.2, ITEMS.md 4): its four cells as slots under the grid,
+        // each with the stack set on it (dim with none carried) and its key beneath; a
+        // stack dragged from the grid onto one sets it, a cell dragged into the grid
+        // empties it, a cell dragged onto another swaps them.
+        let bar_area = col.take(bar_h);
+        let mut cells: Vec<Option<String>> = self.bar.clone().unwrap_or_default();
+        cells.resize(gm_core::sim::BAR_CELLS, None);
+        ui.small(
+            bar_area.x + 14.0 * s,
+            bar_area.y + 2.0 * s,
+            ui::FAINT,
+            "bar",
+        );
+        let mut dropped_on_bar: Vec<Option<(String, i64)>> = Vec::new();
+        let bar_things: Vec<Option<SlotThing>> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let template = t.as_deref()?;
+                let carried = items
+                    .iter()
+                    .find(|it| it.template == template && it.cap > 0);
+                let mut thing = match carried {
+                    Some(it) => looks.thing(it),
+                    None => SlotThing {
+                        id: -(i as i64) - 1,
+                        name: template.to_string(),
+                        said: template.to_string(),
+                        off: true,
+                        ..Default::default()
+                    },
+                };
+                thing.count = Some(carried.map_or(0, |it| it.quantity));
+                thing.mark = None;
+                Some(thing)
+            })
+            .collect();
+        for (i, key) in crate::app::BAR_KEYS.iter().enumerate() {
+            let r = Rect::new(
+                bar_area.x + 22.0 * s + i as f32 * (side + gap),
+                bar_area.y,
+                side,
+                side,
+            );
+            let name = format!("bar {key}");
+            dropped_on_bar.push(ui.drop_slot(r, &name, bar_things[i].as_ref(), &tip));
+            ui.small(r.x + r.w, r.y + r.h + 2.0 * s, ui::FAINT, key);
+        }
+        let mut arranged = cells.clone();
+        let mut changed = false;
+        for (i, dropped) in dropped_on_bar.iter().enumerate() {
+            let Some((from, id)) = dropped else { continue };
+            if from == "items" {
+                if let Some(it) = items.iter().find(|it| it.id == *id && it.cap > 0) {
+                    // A kind sits on one cell: dragged onto another it moves there.
+                    for cell in arranged.iter_mut() {
+                        if cell.as_deref() == Some(it.template.as_str()) {
+                            *cell = None;
+                        }
+                    }
+                    arranged[i] = Some(it.template.clone());
+                    changed = true;
+                }
+            } else if let Some(k) = crate::app::BAR_KEYS
+                .iter()
+                .position(|key| *from == format!("bar {key}"))
+                && k != i
+            {
+                arranged.swap(i, k);
+                changed = true;
+            }
+        }
+        if let Some((from, _)) = &dropped_in_grid
+            && let Some(k) = crate::app::BAR_KEYS
+                .iter()
+                .position(|key| *from == format!("bar {key}"))
+        {
+            arranged[k] = None;
+            changed = true;
+        }
+        if changed && self.ready() {
+            self.bar = Some(arranged.clone());
+            self.ask(
+                hub,
+                Ask::Change("the bar is set"),
+                PlayerEcon::SetBar { cells: arranged },
+            );
+            self.notice.clear();
+        }
         let picked = items.get(self.picked).cloned();
         let nothing = Self::nothing(self.items.is_some(), items.is_empty(), "nothing is carried");
         Self::detail(
@@ -1220,6 +1341,8 @@ mod tests {
         hold: bool,
         held: Vec<(crate::hub::Filler<Answer>, Answer)>,
         asked: Vec<PlayerEcon>,
+        /// The item bar as the hub holds it (LOOK.md 3.2).
+        bar: Vec<Option<String>>,
     }
 
     struct Hub(RefCell<Shop>);
@@ -1275,7 +1398,10 @@ mod tests {
             };
             let read = matches!(
                 op,
-                PlayerEcon::Inventory | PlayerEcon::Storage | PlayerEcon::StallView { .. }
+                PlayerEcon::Inventory
+                    | PlayerEcon::Bar
+                    | PlayerEcon::Storage
+                    | PlayerEcon::StallView { .. }
             );
             let refused = if read {
                 shop.deaf.clone()
@@ -1285,6 +1411,11 @@ mod tests {
             let reply = match (refused, op) {
                 (Some(e), _) => Err(e),
                 (None, PlayerEcon::Inventory) => Ok(holder(shop.coin, &shop.items)),
+                (None, PlayerEcon::Bar) => Ok(PlayerEconReply::Bar(shop.bar.clone())),
+                (None, PlayerEcon::SetBar { cells }) => {
+                    shop.bar = cells;
+                    Ok(PlayerEconReply::Done)
+                }
                 (None, PlayerEcon::Storage) => Ok(holder(0, &shop.stored)),
                 (None, PlayerEcon::StorageDeposit { item }) => {
                     match shop.items.iter().position(|i| i.id == item) {
@@ -1422,6 +1553,52 @@ mod tests {
             self.frame(bag, &press, hub);
             let release = UiInput {
                 cursor: at,
+                released: true,
+                ..Default::default()
+            };
+            self.frame(bag, &release, hub)
+        }
+
+        /// A drag from what says `from` to what says `onto`: a press, four moves, a
+        /// release (LOOK.md 2.4).
+        fn drag(&mut self, bag: &mut Bag, from: &str, onto: &str, hub: &Hub) -> BagAction {
+            self.look(bag, hub);
+            let a = self
+                .st
+                .find(from)
+                .unwrap_or_else(|| panic!("nothing to drag says {from:?}"))
+                .rect
+                .centre();
+            let b = self
+                .st
+                .find(onto)
+                .unwrap_or_else(|| panic!("nothing to drop on says {onto:?}"))
+                .rect
+                .centre();
+            let press = UiInput {
+                cursor: a,
+                last_cursor: a,
+                pressed: true,
+                down: true,
+                ..Default::default()
+            };
+            self.frame(bag, &press, hub);
+            let mut last = a;
+            for i in 1..=4 {
+                let t = i as f32 / 4.0;
+                let at = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                let moved = UiInput {
+                    cursor: at,
+                    last_cursor: last,
+                    down: true,
+                    ..Default::default()
+                };
+                self.frame(bag, &moved, hub);
+                last = at;
+            }
+            let release = UiInput {
+                cursor: b,
+                last_cursor: last,
                 released: true,
                 ..Default::default()
             };
@@ -2016,5 +2193,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The item bar in the inventory (LOOK.md 3.2, ITEMS.md 4): four slots under the
+    /// grid with the cells' stacks and keys; a stack dragged onto one sets it and the hub
+    /// is told; two cells dragged onto each other swap; a cell dragged into the grid
+    /// empties; gear is not a stack and sets nothing.
+    #[test]
+    fn a_stack_is_set_on_the_bar_by_a_drag_and_the_hub_keeps_it() {
+        let hub = shop();
+        {
+            let mut shop = hub.0.borrow_mut();
+            let mut kit = item(7, "kit", &["heals 300, used with F"], &[]);
+            kit.template = "kit".into();
+            kit.components.clear();
+            kit.quantity = 3;
+            kit.cap = 5;
+            kit.what = "kit ×3 of 5".into();
+            shop.items.push(kit);
+            shop.bar = vec![None, None, None, None];
+        }
+        let mut run = Run::new(false);
+        let mut bag = Bag::inventory(&hub, S, ME, run.t);
+        run.look(&mut bag, &hub);
+        assert!(
+            run.offers("bar F")
+                && run.offers("bar 8")
+                && run.offers("bar 9")
+                && run.offers("bar 0")
+        );
+        assert_eq!(bag.bar().map(<[_]>::len), Some(4));
+        // The kit onto the second cell: the hub is told, and the row shows it there.
+        assert_eq!(
+            run.drag(&mut bag, "kit ×3  heals 300, used with F", "bar 8", &hub),
+            BagAction::None
+        );
+        run.look(&mut bag, &hub);
+        assert!(run.shows("the bar is set"), "{:?}", bag.notice);
+        assert_eq!(
+            hub.0.borrow().bar,
+            vec![None, Some("kit".to_string()), None, None]
+        );
+        assert_eq!(bag.bar(), Some(hub.0.borrow().bar.as_slice()));
+        // A sword is gear, not a stack: dropped on a cell it sets nothing.
+        run.drag(&mut bag, "sword  slash +11.0%", "bar 9", &hub);
+        run.look(&mut bag, &hub);
+        assert_eq!(hub.0.borrow().bar[2], None);
+        // The cell onto the first: swapped, under F.
+        run.drag(&mut bag, "bar 8", "bar F", &hub);
+        run.look(&mut bag, &hub);
+        assert_eq!(
+            hub.0.borrow().bar,
+            vec![Some("kit".to_string()), None, None, None]
+        );
+        // The stack from the grid onto another cell while it sits on F: it moves (a kind
+        // sits on one cell).
+        run.drag(&mut bag, "kit ×3  heals 300, used with F", "bar 0", &hub);
+        run.look(&mut bag, &hub);
+        assert_eq!(
+            hub.0.borrow().bar,
+            vec![None, None, None, Some("kit".to_string())]
+        );
+        // The cell into the grid: empty again.
+        run.drag(&mut bag, "bar 0", "sword  slash +11.0%", &hub);
+        run.look(&mut bag, &hub);
+        assert_eq!(hub.0.borrow().bar, vec![None, None, None, None]);
+        assert!(run.st.clipped.is_empty(), "{:?}", run.st.clipped);
     }
 }

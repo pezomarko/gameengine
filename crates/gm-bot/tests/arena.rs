@@ -66,7 +66,7 @@ fn play(bsp: &Arc<Bsp>, build_a: &str, build_b: &str, seed: u64, secs: u32) -> O
             .expect("preset validates");
         // A gun is issued with its magazine only; the rounds a body carries are stacks
         // the hub tells the zone of (MODES.md 11). Here every bot carries plenty of each.
-        zone.set_stacks(id, &ammo);
+        zone.set_stacks(id, &ammo, &[]);
         bots.push((
             id,
             Brain::new(seed * 100 + i as u64, Behaviour::Duelist),

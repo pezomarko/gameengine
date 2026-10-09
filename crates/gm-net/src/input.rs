@@ -24,10 +24,13 @@ pub struct InputFrame {
     pub held: u8,
     /// The body the frame's activation is aimed at (MODES.md 5.3); 0 = none.
     pub target: u32,
+    /// The item cell a `USE` this tick is of (LOOK.md 3.2), 1-based; 0 = none named (the
+    /// first cell's). v18.
+    pub use_slot: u8,
 }
 
 impl InputFrame {
-    pub const BITS: usize = 16 + 12 + 11 + 8 + 8 + 8 + 2 + 32;
+    pub const BITS: usize = 16 + 12 + 11 + 8 + 8 + 8 + 2 + 32 + 3;
 
     fn write(&self, w: &mut BitWriter) {
         w.write_bits(self.buttons as u64, 16);
@@ -38,6 +41,7 @@ impl InputFrame {
         w.write_bits(self.ability as u64, 8);
         w.write_bits(self.held as u64, 2);
         w.write_bits(self.target as u64, 32);
+        w.write_bits(self.use_slot as u64, 3);
     }
 
     fn read(r: &mut BitReader<'_>) -> Result<InputFrame, NetError> {
@@ -50,12 +54,16 @@ impl InputFrame {
             ability: r.read_bits(8)? as u8,
             held: r.read_bits(2)? as u8,
             target: r.read_bits(32)? as u32,
+            use_slot: r.read_bits(3)? as u8,
         };
         if f.buttons & buttons::RESERVED != 0 {
             return Err(NetError::Malformed("reserved button bits set"));
         }
         if f.held > 2 {
             return Err(NetError::Malformed("held out of range"));
+        }
+        if f.use_slot as usize > gm_core::sim::BAR_CELLS {
+            return Err(NetError::Malformed("use_slot out of range"));
         }
         if f.yaw >= 3600 {
             return Err(NetError::Malformed("yaw out of range"));
@@ -77,6 +85,7 @@ impl InputFrame {
             ability: input.ability,
             held: input.held.min(2),
             target: input.target,
+            use_slot: input.use_slot.min(gm_core::sim::BAR_CELLS as u8),
         }
     }
 
@@ -91,6 +100,7 @@ impl InputFrame {
             ability: self.ability,
             held: self.held,
             target: self.target,
+            use_slot: self.use_slot,
         }
     }
 }
@@ -190,6 +200,7 @@ mod tests {
             ability: i,
             held: 1,
             target: 70_000 + i as u32,
+            use_slot: i % 5,
         }
     }
 
@@ -200,8 +211,9 @@ mod tests {
             d.push(frame(i));
         }
         let bytes = d.encode();
-        // header 16 + ack 32 + view 32 + count 2 + first 32 + 4 * 97 = 502 bits = 63 bytes.
-        assert_eq!(bytes.len(), 63);
+        // header 16 + ack 32 + view 32 + count 2 + first 32 + 4 * 100 = 514 bits = 65 bytes
+        // (v18: the item cell's 3 bits a frame).
+        assert_eq!(bytes.len(), 65);
         let back = InputDatagram::decode(&bytes).unwrap();
         assert_eq!(back, d);
         let ticks: Vec<u32> = back.frames().map(|(t, _)| t).collect();
@@ -257,6 +269,7 @@ mod tests {
             ability: 2,
             held: 2,
             target: 9,
+            use_slot: 3,
         };
         let wire = InputFrame::from_sim(&sim);
         let back = wire.to_sim();

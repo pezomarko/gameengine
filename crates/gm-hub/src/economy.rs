@@ -3,6 +3,7 @@
 //! database transaction; `move_coin` and `move_item` are the only writers of balances and
 //! ownership.
 
+use gm_core::sim::BAR_CELLS;
 use std::time::Duration;
 
 use gm_content::items::{ItemContent, Place};
@@ -148,6 +149,10 @@ pub struct Item {
 }
 
 /// A stack in a character's inventory, as a zone reads it (MODES.md 11.2).
+/// What `Economy::gear` reads of a character (ITEMS.md 3.3): the reading's number, the
+/// gear term, the templates worn, the stacks carried and the item bar (LOOK.md 3.2).
+pub type Reading = (u64, Gear, [String; 2], Vec<Stack>, Vec<Option<String>>);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stack {
     pub item: i64,
@@ -666,6 +671,35 @@ async fn gear_in(
 
 /// The stacks of a character's inventory (MODES.md 11.2), in the same reading as its gear.
 /// A character that does not exist carries none.
+/// The item bar's cells (LOOK.md 3.2): the row the character arranged, else the default
+/// made of what it carries now (the first stack that heals, on the first cell).
+async fn bar_in(
+    tx: &mut Tx<'_>,
+    character: i64,
+    stacks: &[Stack],
+) -> Result<Vec<Option<String>>, EconError> {
+    let row =
+        sqlx::query("select cell_1, cell_2, cell_3, cell_4 from bars where character_id = $1")
+            .bind(character)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(internal)?;
+    match row {
+        Some(r) => Ok((1..=BAR_CELLS)
+            .map(|i| r.try_get::<Option<String>, _>(format!("cell_{i}").as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal)?),
+        None => {
+            let mut bar = vec![None; BAR_CELLS];
+            bar[0] = stacks
+                .iter()
+                .find(|s| s.heals.is_some())
+                .map(|s| s.template.clone());
+            Ok(bar)
+        }
+    }
+}
+
 async fn stacks_in(
     tx: &mut Tx<'_>,
     character: i64,
@@ -1048,7 +1082,7 @@ impl Economy {
         item: i64,
         content: &ItemContent,
         hands: &[String],
-    ) -> Result<(u64, Gear, [String; 2], Vec<Stack>), EconError> {
+    ) -> Result<Reading, EconError> {
         let mut tx = self.begin().await?;
         playing_in(&mut tx, character, zone).await?;
         let inv = character_holder(&mut tx, character).await?;
@@ -1109,7 +1143,7 @@ impl Economy {
         zone: &str,
         item: i64,
         content: &ItemContent,
-    ) -> Result<(u64, Gear, [String; 2], Vec<Stack>), EconError> {
+    ) -> Result<Reading, EconError> {
         let mut tx = self.begin().await?;
         playing_in(&mut tx, character, zone).await?;
         let inv = character_holder(&mut tx, character).await?;
@@ -1133,11 +1167,7 @@ impl Economy {
     /// change makes of itself (after its commit) has a larger number than any reading that
     /// could have missed it. A zone that keeps, for each character, the reading with the
     /// largest number holds what the hub holds, in whatever order the answers arrive.
-    pub async fn gear(
-        &self,
-        character: i64,
-        content: &ItemContent,
-    ) -> Result<(u64, Gear, [String; 2], Vec<Stack>), EconError> {
+    pub async fn gear(&self, character: i64, content: &ItemContent) -> Result<Reading, EconError> {
         let mut conn = self.pool.acquire().await.map_err(internal)?;
         let seq: i64 = sqlx::query("select nextval('gear_seq') as seq")
             .fetch_one(&mut *conn)
@@ -1148,8 +1178,65 @@ impl Economy {
         let mut tx = sqlx::Acquire::begin(&mut *conn).await.map_err(internal)?;
         let (gear, templates) = gear_in(&mut tx, character, content).await?;
         let stacks = stacks_in(&mut tx, character, &self.stacks).await?;
+        let bar = bar_in(&mut tx, character, &stacks).await?;
         tx.commit().await.map_err(internal)?;
-        Ok((seq as u64, gear, templates, stacks))
+        Ok((seq as u64, gear, templates, stacks, bar))
+    }
+
+    /// The item bar (LOOK.md 3.2, ITEMS.md 4): the template on each of the four cells as
+    /// the character arranged it; the default while it never has (the first stack it
+    /// carries that heals, on the first cell: the kit under `F`).
+    pub async fn bar(&self, character: i64) -> Result<Vec<Option<String>>, EconError> {
+        let mut conn = self.pool.acquire().await.map_err(internal)?;
+        let mut tx = sqlx::Acquire::begin(&mut *conn).await.map_err(internal)?;
+        let stacks = stacks_in(&mut tx, character, &self.stacks).await?;
+        let bar = bar_in(&mut tx, character, &stacks).await?;
+        tx.commit().await.map_err(internal)?;
+        Ok(bar)
+    }
+
+    /// Arrange the item bar: four cells, each a stack template the content knows or
+    /// nothing. The arrangement is kept whether or not the character carries the stacks
+    /// (a cell stands empty until it does again); a template that is not a stack is
+    /// refused in words.
+    pub async fn set_bar(&self, character: i64, cells: &[Option<String>]) -> Result<(), EconError> {
+        if cells.len() != BAR_CELLS {
+            return Err(EconError::Invalid(format!("a bar has {BAR_CELLS} cells")));
+        }
+        for (i, t) in cells.iter().enumerate() {
+            let Some(t) = t else { continue };
+            if !self.stacks.contains_key(t) {
+                return Err(EconError::Invalid(format!("{t:?} is not a stack")));
+            }
+            if cells[..i].iter().any(|c| c.as_ref() == Some(t)) {
+                return Err(EconError::Invalid(format!("{t:?} twice on the bar")));
+            }
+        }
+        let exists: Option<i64> = sqlx::query("select id from characters where id = $1")
+            .bind(character)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(internal)?
+            .map(|r| r.try_get("id"))
+            .transpose()
+            .map_err(internal)?;
+        if exists.is_none() {
+            return Err(EconError::NotFound);
+        }
+        sqlx::query(
+            "insert into bars (character_id, cell_1, cell_2, cell_3, cell_4) values ($1, $2, $3, $4, $5) \
+             on conflict (character_id) do update set cell_1 = excluded.cell_1, cell_2 = excluded.cell_2, \
+             cell_3 = excluded.cell_3, cell_4 = excluded.cell_4",
+        )
+        .bind(character)
+        .bind(&cells[0])
+        .bind(&cells[1])
+        .bind(&cells[2])
+        .bind(&cells[3])
+        .execute(&self.pool)
+        .await
+        .map_err(internal)?;
+        Ok(())
     }
 
     /// Money supply (ECONOMY.md 1.2).

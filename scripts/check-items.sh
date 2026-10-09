@@ -16,14 +16,15 @@
 #                                      hands it swords and kits, gives a new character coin and
 #                                      stands it at the counter; by UI script the character
 #                                      looks at the stall, buys a sword and a stack of kits,
-#                                      wears the sword, finds it worn through the menu too, and
-#                                      presses F at full health (MODES.md 11.3: the HUD says
-#                                      why no kit was used). Then the same keys from a real
-#                                      keyboard (xdotool), F among them.
+#                                      wears the sword, drags the kits onto the item bar's
+#                                      second cell (LOOK.md 3.2), finds the sword worn through
+#                                      the menu too, and presses F, now an empty cell (MODES.md
+#                                      11.3: the HUD says why nothing was used). Then the same
+#                                      keys from a real keyboard (xdotool), F and 8 among them.
 #   scripts/check-items.sh --browser   the same purchase in both browser builds in headless
 #                                      Chromium (--software: on Chromium's software GPU); the
 #                                      WebGL2 buyer is a frostweaver (the RPG mode), who buys
-#                                      the kits alone and presses F
+#                                      the kits alone and presses F at full health
 # --desktop and --browser need GM_TEST_DATABASE_URL (a Postgres this run wipes).
 # Environment: SKIP_BUILD=1, SKIP_TESTS=1, CHROME (default chromium), KEEP=DIR (keep logs
 # and screenshots there).
@@ -191,8 +192,10 @@ provide() { # character
   "${hub[@]}" --grant-coin "$1" $PURSE > "$tmp/grant.log" 2>&1 || { show "$tmp/grant.log"; fail "coin for $1"; return 1; }
 }
 # What a buyer does once it stands in the game: looks, buys a sword and the kits, wears the
-# sword, and finds it worn through the menu as well; then presses F at full health, which
-# uses no kit and says so (MODES.md 11.3). One line a step: each waits for what it needs.
+# sword, drags the kits onto the item bar's second cell (LOOK.md 3.2: the hub keeps it),
+# and finds it worn through the menu as well; then presses F, the first cell, now empty,
+# which uses nothing and says so (MODES.md 11.3). One line a step: each waits for what it
+# needs.
 KIT_ROW="kit ×3  heals 300, used with F"
 purchase() {
   cat <<EOS
@@ -219,6 +222,8 @@ key I
 wait screen inventory
 expect "30 s"
 expect "$KIT_ROW"
+drag "$KIT_ROW" "bar 8"
+expect "the bar is set"
 click "sword  slash +2.0%"
 click Wear
 expect "sword  slash +2.0%  worn"
@@ -268,11 +273,11 @@ say pressed F
 sleep 1
 EOS
 }
-# The press of F at full health (MODES.md 11.3): the client says why no kit was used; the
-# kits are kept.
-refused() { # log, label
-  if /usr/bin/grep -aq "kit: at full health" "$1"; then ok "$2: F at full health used no kit and the HUD said so"
-  else fail "$2: no word of the kit refused at full health"; fi
+# A press of an item key that used nothing (MODES.md 11.3): the client says why; the kits
+# are kept.
+refused() { # log, label, key, why
+  if /usr/bin/grep -aq "item $3: $4" "$1"; then ok "$2: $3 used nothing ($4) and the HUD said so"
+  else fail "$2: no word of $3 refused ($4)"; fi
 }
 # What the client itself called an error: a browser shows it in its console and plays on
 # (the WebGL build drew no town for two phases, and said so there).
@@ -290,7 +295,7 @@ books() { # swords, kits
   equal "$(echo "$line" | sed -n 's/.* stall_sale=\([0-9]*\).*/\1/p')" "$((($1 + $2) * PRICE))" "coin the keeper was paid"
   local told; told="$(plain "$tmp/town.log" | /usr/bin/grep -a " gear " | /usr/bin/grep -ac 'dealt=\[40, 0, 0, 0, 0, 0, 0, 0\]' || true)"
   atleast "$told" "$1" "times the zone applied a sword's edge on its own kind (40 per mille of slash)"
-  equal "$(plain "$tmp/town.log" | /usr/bin/grep -ac 'kit used' || true)" 0 "kits used (every press was at full health)"
+  equal "$(plain "$tmp/town.log" | /usr/bin/grep -ac 'item used' || true)" 0 "items used (every press was at full health or of an empty cell)"
 }
 
 desktop() {
@@ -353,7 +358,7 @@ EOS
     show "$tmp/buy.log"; fail "the purchase by script did not reach its end"; return
   fi
   quiet "$tmp/buy.log" "the desktop client, at the stall and in the inventory"
-  refused "$tmp/buy.log" "the desktop client, by script"
+  refused "$tmp/buy.log" "the desktop client, by script" F "nothing to use"
   if [[ -n "$t_stall" && -n "$t_worn" ]]; then
     atmost "$(since "$t_stall" "$t_worn")" "$(budget items max_secs_stall_to_worn)" "seconds from E at the stall to the sword being worn (software GPU, by script)"
   else
@@ -379,6 +384,8 @@ say press escape again
 wait screen game
 say press f
 sleep 1
+say press 8
+sleep 1
 quit
 EOS
   } > "$tmp/keys.ui"
@@ -400,14 +407,17 @@ EOS
     "${x[@]}" key Escape
     told "press f" || return 1
     "${x[@]}" key f
+    told "press 8" || return 1
+    "${x[@]}" key 8
   }
   if keys && wait $pid && /usr/bin/grep -aq '^ui-script: ok' "$tmp/keys.log"; then
-    ok "by a real keyboard: E opens the stall the body stands at, Escape closes it, I opens the inventory, F asks for a kit"
+    ok "by a real keyboard: E opens the stall the body stands at, Escape closes it, I opens the inventory, F and 8 ask for the item cells"
   else
     kill $pid 2>/dev/null || true
     show "$tmp/keys.log"; fail "the run by real keys did not reach its end"
   fi
-  refused "$tmp/keys.log" "the desktop client, by a real keyboard"
+  refused "$tmp/keys.log" "the desktop client, by a real keyboard" F "nothing to use"
+  refused "$tmp/keys.log" "the desktop client, by a real keyboard" 8 "at full health"
 }
 
 browser() {
@@ -464,7 +474,11 @@ browser() {
     fi
     if /usr/bin/grep -aq "^GM-BUILD $build" "$tmp/browser-$build.log"; then ok "$build: that build ran"; else fail "$build: another build ran"; fi
     quiet "$tmp/browser-$build.log" "$build, in the town"
-    refused "$tmp/browser-$build.log" "$build, a $preset"
+    if [[ "$preset" == blade ]]; then
+      refused "$tmp/browser-$build.log" "$build, a $preset" F "nothing to use"
+    else
+      refused "$tmp/browser-$build.log" "$build, a $preset" F "at full health"
+    fi
     [[ "$preset" == blade ]] && swords=$((swords + 1))
     kits=$((kits + 1))
   done

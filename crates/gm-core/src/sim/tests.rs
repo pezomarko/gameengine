@@ -91,6 +91,7 @@ fn input(yaw: f32, forward: f32, buttons: u16) -> Input {
         ability: 0,
         held: 0,
         target: 0,
+        use_slot: 0,
     }
 }
 
@@ -2170,6 +2171,7 @@ fn gun_duel_at(rate: TickRate, yaw: f32, apart: f32) -> (BoxWorld, Zone, EntityI
             ("pistol_round".to_string(), 32, None),
             ("kit".to_string(), 2, Some(50)),
         ],
+        &[Some("kit".to_string()), None, None, None],
     );
     (world, zone, a, b)
 }
@@ -3574,47 +3576,61 @@ fn a_bellow_turns_enemies_to_the_roarer_and_not_allies() {
     );
 }
 
-/// The kit (MODES.md 11.3): a press of `USE` on the ground with a kit carried and the hands
-/// free begins a use of 1,500 ms that ends with one kit fewer, 50 healed and `KitUsed` said;
-/// at full health the zone clears it the same tick; in the air, with the hands busy or with
-/// no kit it begins nothing, and `kit_refusal` says which; a refused press is not kept.
+/// The kit on the item bar (MODES.md 11.3, LOOK.md 3.2): a press of `USE` naming its cell,
+/// on the ground with a kit carried and the hands free, begins a use of 1,500 ms that ends
+/// with one kit fewer, 50 healed and `ItemUsed` said; at full health the zone clears it the
+/// same tick; in the air, with the hands busy or with an empty cell it begins nothing, and
+/// `item_refusal` says which; a refused press is not kept; a cell is used by its own key.
 #[test]
 fn a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why() {
     let (world, mut zone, a, b) = gun_duel(0.0, 400.0);
     let quiet = [(a, held(0.0, 0.0, 0, 0)), (b, input(180.0, 0.0, 0))];
-    let press = [
-        (a, held(0.0, 0.0, buttons::USE, 0)),
-        (b, input(180.0, 0.0, 0)),
-    ];
-    let press_b = [
-        (a, held(0.0, 0.0, 0, 0)),
-        (b, input(180.0, 0.0, buttons::USE)),
-    ];
+    // The kit sits on the first cell (`F`): a `USE` names it, or names no cell at all.
+    let use_cell = |slot: u8, h: u8| Input {
+        use_slot: slot,
+        ..held(0.0, 0.0, buttons::USE, h)
+    };
+    let press = [(a, use_cell(1, 0)), (b, input(180.0, 0.0, 0))];
+    let press_b = [(a, held(0.0, 0.0, 0, 0)), (b, use_cell(0, 0))];
     run(&mut zone, &world, &quiet, 5);
     let a_mover = |zone: &Zone| zone.player(a).unwrap().mover;
-    let refusal = |zone: &Zone, id: EntityId| {
+    let refusal = |zone: &Zone, id: EntityId, cell: usize| {
         let p = zone.player(id).unwrap();
-        kit_refusal(&p.mover, p.last_input_tick, p.mover.statuses.staggered())
+        item_refusal(
+            &p.mover,
+            cell,
+            p.last_input_tick,
+            p.mover.statuses.staggered(),
+        )
     };
-    assert_eq!(a_mover(&zone).kits, 2);
-    assert_eq!(refusal(&zone, a), None, "two kits, on the ground, idle");
-    assert_eq!(refusal(&zone, b), Some(KitRefusal::NoKit));
-    assert_eq!(KitRefusal::NoKit.word(), "no kit");
+    assert_eq!(a_mover(&zone).bar, [2, 0, 0, 0]);
+    assert_eq!(refusal(&zone, a, 0), None, "two kits, on the ground, idle");
+    assert_eq!(
+        refusal(&zone, a, 1),
+        Some(ItemRefusal::Empty),
+        "nothing on the second cell"
+    );
+    assert_eq!(refusal(&zone, b, 0), Some(ItemRefusal::Empty));
+    assert_eq!(ItemRefusal::Empty.word(), "nothing to use");
+    assert_eq!(
+        (bar_cell(0), bar_cell(1), bar_cell(4), bar_cell(5)),
+        (Some(0), Some(0), Some(3), None)
+    );
 
     // At full health: the mover begins it and the zone clears it the same tick.
     tick(&mut zone, &world, &press, 0);
     run(&mut zone, &world, &quiet, 1);
     let p = zone.player(a).unwrap();
     assert!(
-        p.mover.kit_until.is_none() && p.mover.kits == 2,
+        p.mover.use_until.is_none() && p.mover.bar[0] == 2,
         "at full health nothing is begun"
     );
     run(&mut zone, &world, &quiet, 2);
-    // No kit: nothing, whatever the health.
+    // An empty cell: nothing, whatever the health.
     zone.player_mut(b).unwrap().health -= 300;
     tick(&mut zone, &world, &press_b, 0);
     run(&mut zone, &world, &quiet, 1);
-    assert!(zone.player(b).unwrap().mover.kit_until.is_none());
+    assert!(zone.player(b).unwrap().mover.use_until.is_none());
     run(&mut zone, &world, &quiet, 2);
 
     // Hurt: the press begins a use; 1,500 ms later one kit is gone, 50 is healed, and
@@ -3624,22 +3640,34 @@ fn a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why() {
     tick(&mut zone, &world, &press, 0);
     run(&mut zone, &world, &quiet, 1);
     let p = zone.player(a).unwrap();
-    assert!(p.mover.using_kit(p.last_input_tick), "the use began");
+    assert_eq!(
+        p.mover.using_item(p.last_input_tick),
+        Some(0),
+        "the use began"
+    );
     assert_eq!(p.anim, anim::USE);
     let ticks = kit_use_ticks(RATE.dt()) as usize;
     assert_eq!(ticks, RATE.ms_to_ticks(KIT_USE_MS) as usize);
     run(&mut zone, &world, &quiet, ticks - 3);
     let p = zone.player(a).unwrap();
-    assert!(p.mover.using_kit(p.last_input_tick), "still at it");
+    assert!(
+        p.mover.using_item(p.last_input_tick).is_some(),
+        "still at it"
+    );
+    assert_eq!(
+        refusal(&zone, a, 0),
+        Some(ItemRefusal::HandsBusy),
+        "a second press during the use"
+    );
     assert_eq!(p.health, before, "the heal comes at the end");
     run(&mut zone, &world, &quiet, 4);
     let p = zone.player(a).unwrap();
-    assert!(!p.mover.using_kit(p.last_input_tick));
-    assert_eq!((p.mover.kits, p.health), (1, before + 50));
+    assert!(p.mover.using_item(p.last_input_tick).is_none());
+    assert_eq!((p.mover.bar[0], p.health), (1, before + 50));
     assert_eq!(
         zone.events
             .iter()
-            .filter(|e| matches!(e, ZoneEvent::KitUsed(id) if *id == a))
+            .filter(|e| matches!(e, ZoneEvent::ItemUsed { id, cell: 0 } if *id == a))
             .count(),
         1
     );
@@ -3655,14 +3683,19 @@ fn a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why() {
     tick(&mut zone, &world, &pistol(buttons::PRIMARY), 0);
     tick(&mut zone, &world, &pistol(0), 0);
     tick(&mut zone, &world, &pistol(buttons::RELOAD), 0);
-    tick(&mut zone, &world, &pistol(buttons::USE), 0);
+    tick(
+        &mut zone,
+        &world,
+        &[(a, use_cell(1, 1)), (b, input(180.0, 0.0, 0))],
+        0,
+    );
     run(&mut zone, &world, &pistol(0), 1);
     let p = zone.player(a).unwrap();
     assert!(p.mover.reloading(p.last_input_tick), "the pistol reloads");
-    assert_eq!(refusal(&zone, a), Some(KitRefusal::HandsBusy));
-    assert_eq!(KitRefusal::HandsBusy.word(), "hands busy");
+    assert_eq!(refusal(&zone, a, 0), Some(ItemRefusal::HandsBusy));
+    assert_eq!(ItemRefusal::HandsBusy.word(), "hands busy");
     assert!(
-        p.mover.kit_until.is_none(),
+        p.mover.use_until.is_none(),
         "nothing begun with the hands busy"
     );
     run(&mut zone, &world, &pistol(0), 200);
@@ -3672,10 +3705,10 @@ fn a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why() {
         "the hands are free again"
     );
     assert!(
-        p.mover.kit_until.is_none(),
+        p.mover.use_until.is_none(),
         "the refused press was not kept"
     );
-    assert_eq!(p.mover.kits, 1);
+    assert_eq!(p.mover.bar[0], 1);
     run(&mut zone, &world, &quiet, 2);
 
     // In the air: a jump, then the press.
@@ -3692,12 +3725,12 @@ fn a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why() {
     run(&mut zone, &world, &quiet, 1);
     let p = zone.player(a).unwrap();
     assert!(!p.mover.mv.on_ground, "in the air");
-    assert_eq!(refusal(&zone, a), Some(KitRefusal::InTheAir));
-    assert_eq!(KitRefusal::InTheAir.word(), "not in the air");
-    assert!(p.mover.kit_until.is_none());
+    assert_eq!(refusal(&zone, a, 0), Some(ItemRefusal::InTheAir));
+    assert_eq!(ItemRefusal::InTheAir.word(), "not in the air");
+    assert!(p.mover.use_until.is_none());
     run(&mut zone, &world, &quiet, 40);
     assert!(zone.player(a).unwrap().mover.mv.on_ground);
-    assert_eq!(a_mover(&zone).kits, 1, "nothing was used in the air");
+    assert_eq!(a_mover(&zone).bar[0], 1, "nothing was used in the air");
 
     // In a town at 20 Hz the use is the same second and a half, not 96 of its ticks.
     let (world, mut zone, a, b) = gun_duel_at(TickRate::TOWN, 0.0, 400.0);
@@ -3709,18 +3742,60 @@ fn a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why() {
     run(&mut zone, &world, &quiet, 1);
     let p = zone.player(a).unwrap();
     assert!(
-        p.mover.using_kit(p.last_input_tick),
+        p.mover.using_item(p.last_input_tick).is_some(),
         "the use began at 20 Hz"
     );
     run(&mut zone, &world, &quiet, 27);
     let p = zone.player(a).unwrap();
     assert!(
-        p.mover.using_kit(p.last_input_tick),
+        p.mover.using_item(p.last_input_tick).is_some(),
         "still at it after 1.35 s"
     );
     run(&mut zone, &world, &quiet, 4);
     let p = zone.player(a).unwrap();
-    assert!(!p.mover.using_kit(p.last_input_tick), "done after 1.5 s");
-    assert_eq!((p.mover.kits, p.health), (1, before + 50));
-    let _ = b;
+    assert!(
+        p.mover.using_item(p.last_input_tick).is_none(),
+        "done after 1.5 s"
+    );
+    assert_eq!((p.mover.bar[0], p.health), (1, before + 50));
+
+    // The kit moved to the third cell (the bar is the player's, LOOK.md 3.2): `F` finds
+    // nothing, the cell's key uses it; the use ends with `used` for the zone, which heals
+    // by the cell.
+    zone.set_stacks(
+        a,
+        &[("kit".to_string(), 1, Some(50))],
+        &[None, None, Some("kit".to_string()), None],
+    );
+    assert_eq!(a_mover(&zone).bar, [0, 0, 1, 0]);
+    zone.player_mut(a).unwrap().health -= 300;
+    let before = zone.player(a).unwrap().health;
+    tick(&mut zone, &world, &press, 0);
+    run(&mut zone, &world, &quiet, 1);
+    assert!(
+        zone.player(a).unwrap().mover.use_until.is_none(),
+        "F: nothing to use"
+    );
+    tick(
+        &mut zone,
+        &world,
+        &[(a, use_cell(3, 0)), (b, input(180.0, 0.0, 0))],
+        0,
+    );
+    run(&mut zone, &world, &quiet, 1);
+    let p = zone.player(a).unwrap();
+    assert_eq!(p.mover.using_item(p.last_input_tick), Some(2));
+    assert!(
+        p.mover
+            .use_progress(p.last_input_tick, TickRate::TOWN.dt())
+            .is_some_and(|f| f < 0.2)
+    );
+    run(&mut zone, &world, &quiet, 32);
+    let p = zone.player(a).unwrap();
+    assert_eq!((p.mover.bar, p.health), ([0, 0, 0, 0], before + 50));
+    assert!(
+        zone.events
+            .iter()
+            .any(|e| matches!(e, ZoneEvent::ItemUsed { id, cell: 2 } if *id == a))
+    );
 }

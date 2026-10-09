@@ -205,18 +205,21 @@ become, not what they do.
   what they wore. The hub has taken its characters offline (HUB.md 5), and nothing that
   zone does reaches the books any more.
 
-## 4. The hub (v1.7; v11 adds stacks, MODES.md 11.7)
+## 4. The hub (v1.7; v11 adds stacks, MODES.md 11.7; v12 the item bar, LOOK.md 3.2)
 
 `HUB_VERSION` is 7 and `PLAYER_VERSION` 2 (11 and 4 since 2026-10-07: `items.quantity`,
 `GearReading.stacks`, `ZoneEconOp::Consume`, `HubNotice::Gear`, `ItemSummary.quantity`
 and `cap`; `StallBuy` answers `Gear`; `PLAYER_VERSION` 5 since 2026-10-08:
 `ItemSummary.fits`, section 2; `PLAYER_VERSION` 6 since 2026-10-09: `ItemSummary.edge` is
-nine wide, MATRIX.md 14). The hub loads the content's looks beside the pack
+nine wide, MATRIX.md 14; **12 and 7** the same day: the item bar, below). The hub loads
+the content's looks beside the pack
 (`HubConfig.looks`) for the props the abilities hold. The requests of Phase 11:
 
 | Request | From | Answer | |
 |---|---|---|---|
 | `EconOp::Inventory`, `Storage` | a session | `Holder { coin, items }` | an item now says its `place`, its `edge` per type, whether it is `worn`, and itself in words (`what`, `does`) |
+| `EconOp::Bar` | a session | `Bar(cells)` | the item bar (LOOK.md 3.2): four cells, a stack template or nothing each, as the character arranged it; never arranged, the first stack it carries that heals on the first cell |
+| `EconOp::SetBar { cells }` | a session | `Done` | arranges it: four cells, each a stack template of the content or nothing (gear is refused in words); kept whether or not the stacks are carried; the character's zone is told with its gear (`HubNotice::Gear`: `GearReading.bar`) |
 | `EconOp::StallView { stall }` | a session, from anywhere | `Listings { owner, mine, listings }` | each listing: its id, the item, the price |
 | `EconOp::StallList { item, price }` | a session | `Id` | into the caller's own stall, **which stands in the zone the character plays in** |
 | `EconOp::StallUnlist { listing }` | a session | `Done` | out of it again, under the same rule; the inventory must have room |
@@ -355,6 +358,13 @@ worn in its place now (`you wear: slash +2.0%`, or that nothing is), and what it
 of. Buttons: **Wear** / **Take off** (asked of the zone; one a second), **Sell** (when the
 character keeps a stall in this zone and the item is not worn), **Store** (into the
 account's storage), **Storage**, **Close**.
+
+Under the grid, **the item bar** (LOOK.md 3.2): the four cells as drop slots named `bar
+F`, `bar 8`, `bar 9`, `bar 0`, each with the stack set on it (dim, `×0`, while none is
+carried) and its key beneath. A stack dragged from the grid onto a cell sets it (gear
+sets nothing; a kind sits on one cell, so it leaves the cell it was on), a cell dragged
+onto another swaps the two, a cell dragged into the grid empties it; each is `SetBar` to the hub (section 4), said as `the bar is set`, and the HUD's
+cells follow at once.
 
 ### 6.2 Storage
 

@@ -376,6 +376,16 @@ it does not know goes on to the next: one stream, one notice.
 
 ### 3.9 Possessions (ITEMS.md)
 
+- **The item bar** (LOOK.md 3.2, ITEMS.md 4; `HUB_VERSION` 12, `PLAYER_VERSION` 7,
+  2026-10-08): a small record a character, `bars (character_id, cell_1..cell_4 text)`,
+  one row once the character has arranged it (migration 0013). `EconOp::Bar` reads it
+  (the default without a row: the first stack carried that heals, on the first cell);
+  `EconOp::SetBar { cells }` writes it, as a session's own request, since it is not part
+  of the save a zone makes (HUB.md 3.2 keeps the zone the only writer of the character
+  while it plays, and this changes nothing of that): the character's zone is then told
+  with the gear, as after a storage move (`tell_zone_of_items`, `HubNotice::Gear`), and
+  `GearReading.bar` carries the four cells to it in every reading.
+
 - **What is worn changes through a zone.** `ZoneEconOp::Wear { character, item }` and
   `TakeOff { character, item }` are answered `EconReply::Gear(GearReading { seq, gear,
   templates })` (`templates`: the keys of the templates worn by place, weapon and armour,
@@ -480,6 +490,7 @@ accounts   (id bigserial, email text unique, password_hash text, created timesta
 characters (id bigserial, account_id → accounts, name text unique, build jsonb, location jsonb,
             viewport smallint, play_seconds int, created, updated)
 zones_log  (id bigserial, zone text, event text, at timestamptz)        -- registry events, ops
+bars       (character_id → characters, cell_1..cell_4 text)            -- the item bar (3.9), 0013
 ```
 
 `location` is typed, not free JSON, because "exactly one place" is an invariant the database

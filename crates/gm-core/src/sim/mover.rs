@@ -8,7 +8,9 @@ use crate::collide::Aabb;
 use crate::geom::Capsule;
 use crate::matrix::EVADING_GRACE_TICKS;
 use crate::movement::{MoveInput, MoveVars, PlayerState, player_move, yaw_vectors};
-use crate::sim::{COMMAND_EXIT_MS, KIT_USE_MS, MAX_ABILITIES, REGEN_PAUSE_MS, tick_delta};
+use crate::sim::{
+    BAR_CELLS, COMMAND_EXIT_MS, KIT_USE_MS, MAX_ABILITIES, REGEN_PAUSE_MS, tick_delta,
+};
 use crate::status::Statuses;
 use crate::tick::{Tick, TickRate};
 use crate::trace::{CollisionWorld, Hull};
@@ -86,6 +88,10 @@ pub struct Input {
     pub held: u8,
     /// The body an activation this tick is aimed at (MODES.md 5.3); 0 = none.
     pub target: u32,
+    /// The item cell a press of `USE` this tick uses (LOOK.md 3.2, MODES.md 11.3):
+    /// 1-based, 0 = none (a `USE` without a cell is the first cell's, the kit's by
+    /// default).
+    pub use_slot: u8,
 }
 
 /// A body near the mover, as the magnet (MODES.md 4.2) and a target-action (5.3) read it.
@@ -207,11 +213,15 @@ pub struct Mover {
     /// secondary's.
     pub held: u8,
     pub guns: [GunState; 2],
-    /// The kits carried (MODES.md 11.3): the kit stack's quantity, read from the inventory
-    /// by the zone and adopted from the own block by the client; and a use under way, the
-    /// frame tick it ends at.
-    pub kits: u16,
-    pub kit_until: Option<Tick>,
+    /// The item bar (LOOK.md 3.2, MODES.md 11.3): how many of each cell's stack the body
+    /// carries, read from the inventory by the zone and adopted from the own block by the
+    /// client; a use under way, the frame tick it ends at and the cell it is of; and the
+    /// cell whose use ended this frame, for the zone (which knows what the stack does) to
+    /// take.
+    pub bar: [u16; BAR_CELLS],
+    pub use_until: Option<Tick>,
+    pub use_cell: u8,
+    pub used: Option<u8>,
     /// Crouching (MODES.md 3.4, 3.5, 10.2): the button held on the ground. The eye, the
     /// top of the hitbox and the body are lower by `CROUCH_DROP`, the head band with
     /// them, and the body walks at half speed; the world hull does not change.
@@ -240,8 +250,10 @@ impl Mover {
             chain: None,
             held: 0,
             guns: [GunState::default(); 2],
-            kits: 0,
-            kit_until: None,
+            bar: [0; BAR_CELLS],
+            use_until: None,
+            use_cell: 0,
+            used: None,
             crouched: false,
         }
     }
@@ -297,9 +309,20 @@ impl Mover {
             .is_some_and(|u| tick_delta(now, u) < 0)
     }
 
-    /// A kit in use at frame tick `now` (MODES.md 11.3).
-    pub fn using_kit(&self, now: Tick) -> bool {
-        self.kit_until.is_some_and(|u| tick_delta(now, u) < 0)
+    /// An item in use at frame tick `now` (MODES.md 11.3): the cell it is of.
+    pub fn using_item(&self, now: Tick) -> Option<u8> {
+        self.use_until
+            .is_some_and(|u| tick_delta(now, u) < 0)
+            .then_some(self.use_cell)
+    }
+
+    /// How far a use under way has come at `now` (0 just begun, 1 done), for the cell's
+    /// sweep; `None` without one.
+    pub fn use_progress(&self, now: Tick, dt: f32) -> Option<f32> {
+        let until = self.use_until?;
+        let left = tick_delta(until, now).max(0) as f32;
+        let whole = kit_use_ticks(dt).max(1) as f32;
+        Some((1.0 - left / whole).clamp(0.0, 1.0))
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -364,7 +387,7 @@ impl Mover {
             g.reload_until = None;
             g.spray = 0;
         }
-        self.kit_until = None;
+        self.use_until = None;
     }
 }
 
@@ -482,7 +505,7 @@ pub fn step_mover<W: CollisionWorld + ?Sized>(
         for g in &mut m.guns {
             g.reload_until = None;
         }
-        m.kit_until = None;
+        m.use_until = None;
     }
 
     // The command stance (COMPANIONS.md 5.1): it begins on a frame that holds the button
@@ -541,12 +564,12 @@ pub fn step_mover<W: CollisionWorld + ?Sized>(
     };
     if let Some(slot) = slot
         && !staggered
-        && !m.using_kit(now)
+        && m.using_item(now).is_none()
     {
         try_activate(world, sheet, m, slot as usize, now, input, company);
     }
     reload_step(sheet, m, pressed, now, staggered);
-    kit_step(m, pressed, now, dt, staggered);
+    item_step(m, pressed, input.use_slot, now, dt, staggered);
 
     if let Some(mut s) = m.script {
         let ab = &kit.abilities[s.ability as usize];
@@ -603,8 +626,8 @@ pub fn step_mover<W: CollisionWorld + ?Sized>(
     {
         scale *= kit.abilities[i as usize].move_scale.max(0.5);
     }
-    // A kit is used walking (MODES.md 11.3).
-    if m.using_kit(now) {
+    // An item is used walking (MODES.md 11.3).
+    if m.using_item(now).is_some() {
         scale *= 0.5;
     }
     // A crouch is a half-speed creep with the eye lowered (MODES.md 3.4); the button
@@ -758,7 +781,7 @@ fn reload_step(sheet: &Sheet, m: &mut Mover, pressed: u16, now: Tick, staggered:
                 && g.magazine < f.magazine
                 && g.reserve > 0
                 && m.script.is_none()
-                && m.kit_until.is_none()
+                && m.use_until.is_none()
             {
                 g.reload_until = Some(now.wrapping_add(f.reload.max(1)));
                 g.spray = 0;
@@ -767,72 +790,95 @@ fn reload_step(sheet: &Sheet, m: &mut Mover, pressed: u16, now: Tick, staggered:
     }
 }
 
-/// Why a press of `USE` begins no kit (MODES.md 11.3), in the words the HUD says. The
-/// zone's own refusal, at full health, is not the mover's to know: it clears the use the
-/// same tick (`Zone::step`).
+/// Why a press of `USE` begins no item's use (MODES.md 11.3), in the words the HUD says.
+/// The zone's own refusal, at full health, is not the mover's to know: it clears the use
+/// the same tick (`Zone::step`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KitRefusal {
-    /// No kit is carried.
-    NoKit,
+pub enum ItemRefusal {
+    /// The cell is empty: nothing of its stack is carried, or nothing is set on it.
+    Empty,
     /// The body is in the air.
     InTheAir,
-    /// A script, a dash, a reload or the command stance has the hands.
+    /// A script, a dash, a reload, the command stance or another use has the hands.
     HandsBusy,
     /// Staggered or down.
     Staggered,
 }
 
-impl KitRefusal {
+impl ItemRefusal {
     /// The word the HUD shows for a second (MODES.md 11.3).
     pub fn word(self) -> &'static str {
         match self {
-            KitRefusal::NoKit => "no kit",
-            KitRefusal::InTheAir => "not in the air",
-            KitRefusal::HandsBusy => "hands busy",
-            KitRefusal::Staggered => "staggered",
+            ItemRefusal::Empty => "nothing to use",
+            ItemRefusal::InTheAir => "not in the air",
+            ItemRefusal::HandsBusy => "hands busy",
+            ItemRefusal::Staggered => "staggered",
         }
     }
 }
 
-/// Why a kit pressed now would be refused, `None` when it would begin (MODES.md 11.3):
-/// what `kit_step` asks before it begins one, and what the client says of a press that
-/// began nothing. `staggered` is the body's stagger or knockdown.
-pub fn kit_refusal(m: &Mover, now: Tick, staggered: bool) -> Option<KitRefusal> {
-    if m.kits == 0 {
-        Some(KitRefusal::NoKit)
+/// The cell a frame's `use_slot` names (1-based on the wire), 0-based; `None` for one
+/// the bar does not have. A `USE` with no cell named is the first cell's.
+pub fn bar_cell(use_slot: u8) -> Option<usize> {
+    let cell = use_slot.max(1) as usize - 1;
+    (cell < BAR_CELLS).then_some(cell)
+}
+
+/// Why the item of `cell` (0-based) pressed now would be refused, `None` when its use
+/// would begin (MODES.md 11.3): what `item_step` asks before it begins one, and what the
+/// client says of a press that began nothing. `staggered` is the body's stagger or
+/// knockdown.
+pub fn item_refusal(m: &Mover, cell: usize, now: Tick, staggered: bool) -> Option<ItemRefusal> {
+    if m.bar.get(cell).is_none_or(|n| *n == 0) {
+        Some(ItemRefusal::Empty)
     } else if staggered {
-        Some(KitRefusal::Staggered)
+        Some(ItemRefusal::Staggered)
     } else if !m.mv.on_ground {
-        Some(KitRefusal::InTheAir)
-    } else if m.script.is_some() || m.dash.is_some() || m.reloading(now) || m.commanding(now) {
-        Some(KitRefusal::HandsBusy)
+        Some(ItemRefusal::InTheAir)
+    } else if m.script.is_some()
+        || m.dash.is_some()
+        || m.reloading(now)
+        || m.commanding(now)
+        || m.using_item(now).is_some()
+    {
+        Some(ItemRefusal::HandsBusy)
     } else {
         None
     }
 }
 
-/// A kit's use (MODES.md 11.3): `USE` pressed on the ground with a kit carried and the
-/// hands free begins it; it ends by itself after `KIT_USE_MS`, one kit fewer. The heal is
-/// the zone's (it knows the health): it reads the kit that went. A stagger or a knockdown
-/// drops it with the kit kept (the stagger block above). A press that is refused is not
-/// kept: `USE` is a press, not a wish (the HUD says why, and the player presses again).
-fn kit_step(m: &mut Mover, pressed: u16, now: Tick, dt: f32, staggered: bool) {
-    match m.kit_until {
+/// An item's use (MODES.md 11.3, LOOK.md 3.2): `USE` pressed with a cell named, on the
+/// ground, with something in the cell and the hands free, begins it; it ends by itself
+/// after `KIT_USE_MS`, one fewer in the cell, and `used` says which cell for the zone,
+/// which knows what the stack does (a kit heals) and reads it the same step. A stagger or
+/// a knockdown drops it with the item kept (the stagger block above). A press that is
+/// refused is not kept: `USE` is a press, not a wish (the HUD says why, and the player
+/// presses again).
+fn item_step(m: &mut Mover, pressed: u16, use_slot: u8, now: Tick, dt: f32, staggered: bool) {
+    match m.use_until {
         Some(until) if tick_delta(now, until) >= 0 => {
-            m.kit_until = None;
-            m.kits = m.kits.saturating_sub(1);
+            m.use_until = None;
+            let cell = m.use_cell as usize;
+            if let Some(n) = m.bar.get_mut(cell) {
+                *n = n.saturating_sub(1);
+                m.used = Some(m.use_cell);
+            }
         }
         Some(_) => {}
         None => {
-            if pressed & buttons::USE != 0 && kit_refusal(m, now, staggered).is_none() {
-                m.kit_until = Some(now.wrapping_add(kit_use_ticks(dt)));
+            if pressed & buttons::USE != 0
+                && let Some(cell) = bar_cell(use_slot)
+                && item_refusal(m, cell, now, staggered).is_none()
+            {
+                m.use_until = Some(now.wrapping_add(kit_use_ticks(dt)));
+                m.use_cell = cell as u8;
             }
         }
     }
 }
 
-/// Frames a kit's use takes (`KIT_USE_MS`) at the tick length `dt`: 1.5 s in a town at
-/// 20 Hz as in a fight at 64.
+/// Frames an item's use takes (`KIT_USE_MS`, the kit's and every stack's for now) at the
+/// tick length `dt`: 1.5 s in a town at 20 Hz as in a fight at 64.
 pub fn kit_use_ticks(dt: f32) -> Tick {
     (KIT_USE_MS as f32 / 1000.0 / dt).ceil() as Tick
 }

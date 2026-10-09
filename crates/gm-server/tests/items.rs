@@ -61,9 +61,12 @@ struct Shared {
     say: Vec<FromClient>,
     health: i32,
     alive: bool,
-    /// The kits the own block says it carries, and whether one is in use (MODES.md 11.3).
-    kits: u16,
-    using_kit: bool,
+    /// The item bar the own block says it carries (LOOK.md 3.2), and the cell in use
+    /// (MODES.md 11.3).
+    bar: [u16; gm_core::sim::BAR_CELLS],
+    using: Option<u8>,
+    /// The cell the next frames' `USE` names (1-based).
+    use_slot: u8,
     synced: bool,
     heard: Vec<FromZone>,
     stalls: Vec<StallEntry>,
@@ -130,8 +133,8 @@ impl Hand {
                             let mut s = seen.lock().unwrap();
                             s.health = client.own_health;
                             s.alive = client.own_alive;
-                            s.kits = client.mover.kits;
-                            s.using_kit = client.mover.using_kit(client.tick);
+                            s.bar = client.mover.bar;
+                            s.using = client.mover.using_item(client.tick);
                             s.synced = client.synced();
                             let input = Input {
                                 buttons: s.buttons,
@@ -142,6 +145,7 @@ impl Hand {
                                 ability: 0,
                                 held: s.held,
                                 target: 0,
+                                use_slot: s.use_slot,
                             };
                             (input, std::mem::take(&mut s.say))
                         };
@@ -266,11 +270,18 @@ impl Hand {
         self.shared.lock().unwrap().buttons = 0;
     }
 
-    /// One press of `F` (MODES.md 11.3): `USE` held for a tenth of a second.
-    async fn press_kit(&self) {
-        self.shared.lock().unwrap().buttons = buttons::USE;
+    /// One press of an item cell's key (MODES.md 11.3, LOOK.md 3.2): `USE` naming the
+    /// cell (1-based; `F` is 1), held for a tenth of a second.
+    async fn press_item(&self, cell: u8) {
+        {
+            let mut s = self.shared.lock().unwrap();
+            s.buttons = buttons::USE;
+            s.use_slot = cell;
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
-        self.shared.lock().unwrap().buttons = 0;
+        let mut s = self.shared.lock().unwrap();
+        s.buttons = 0;
+        s.use_slot = 0;
     }
 
     /// Hang up without a goodbye: the zone saves the character and it goes offline.
@@ -1148,7 +1159,7 @@ async fn a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health() {
     else {
         panic!("list")
     };
-    assert_eq!(buyer_hand.shared.lock().unwrap().kits, 0);
+    assert_eq!(buyer_hand.shared.lock().unwrap().bar, [0; 4]);
     assert_eq!(
         buyer_hand
             .ask_when_calm(FromClient::StallBuy {
@@ -1159,9 +1170,10 @@ async fn a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health() {
             .await,
         Ok(())
     );
-    // The zone read the stack after the buy, and the own block carries it (MODES.md 11.7).
+    // The zone read the stack after the buy, and the own block carries it on the first
+    // cell: the bar's default for a character that never arranged it (MODES.md 11.7).
     buyer_hand
-        .until("the zone to learn of the kits", |s| s.kits == 3)
+        .until("the zone to learn of the kits", |s| s.bar == [3, 0, 0, 0])
         .await;
     let heals = buyer
         .inventory()
@@ -1180,12 +1192,12 @@ async fn a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health() {
         .expect("the kits in the inventory");
 
     // At full health a press begins nothing that lasts: the kit is kept.
-    buyer_hand.press_kit().await;
+    buyer_hand.press_item(1).await;
     tokio::time::sleep(Duration::from_millis(600)).await;
     {
         let s = buyer_hand.shared.lock().unwrap();
-        assert!(!s.using_kit, "at full health the zone clears the use");
-        assert_eq!(s.kits, 3);
+        assert!(s.using.is_none(), "at full health the zone clears the use");
+        assert_eq!(s.bar, [3, 0, 0, 0]);
     }
 
     // Hurt by the keeper's hammer, the press heals: a second and a half later, the kit's
@@ -1198,12 +1210,14 @@ async fn a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(400)).await;
-    buyer_hand.press_kit().await;
-    buyer_hand.until("the use to begin", |s| s.using_kit).await;
+    buyer_hand.press_item(1).await;
+    buyer_hand
+        .until("the use to begin", |s| s.using == Some(0))
+        .await;
     let began = Instant::now();
     let (healed_to, kits_left) = buyer_hand
         .until("the heal", |s| {
-            (s.health > hurt).then_some((s.health, s.kits))
+            (s.health > hurt).then_some((s.health, s.bar[0]))
         })
         .await
         .unwrap();
@@ -1214,7 +1228,7 @@ async fn a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health() {
     );
     assert_eq!(healed_to, (hurt + heals).min(full));
     assert_eq!(kits_left, 2, "one kit fewer at the end");
-    assert!(!buyer_hand.shared.lock().unwrap().using_kit);
+    assert!(buyer_hand.shared.lock().unwrap().using.is_none());
     // The hub was told (Consume): the stack is two.
     let started = Instant::now();
     loop {
@@ -1234,5 +1248,47 @@ async fn a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health() {
         "items: a kit bought for 6 s, pressed at {hurt} of {full}, healed {heals} to {healed_to} in {:.2} s, two left",
         took.as_secs_f32()
     );
+
+    // The bar is the player's (LOOK.md 3.2): the kit moved to the third cell through the
+    // hub, the zone is told with the gear; `F` finds nothing there now, and the third
+    // cell's key uses one.
+    assert_eq!(
+        buyer
+            .econ(EconOp::SetBar {
+                cells: vec![None, None, Some("kit".to_string()), None]
+            })
+            .await,
+        EconReply::Done
+    );
+    buyer_hand
+        .until("the zone to learn of the bar", |s| s.bar == [0, 0, 2, 0])
+        .await;
+    smith_hand.swing().await;
+    let hurt = buyer_hand
+        .until("the second blow to land", |s| {
+            (s.health < full).then_some(s.health)
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    buyer_hand.press_item(1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    {
+        let s = buyer_hand.shared.lock().unwrap();
+        assert!(s.using.is_none(), "F: nothing on the first cell");
+        assert_eq!(s.bar, [0, 0, 2, 0]);
+    }
+    buyer_hand.press_item(3).await;
+    buyer_hand
+        .until("the third cell's use to begin", |s| s.using == Some(2))
+        .await;
+    let (healed_to, left) = buyer_hand
+        .until("the second heal", |s| {
+            (s.health > hurt).then_some((s.health, s.bar))
+        })
+        .await
+        .unwrap();
+    assert_eq!(healed_to, (hurt + heals).min(full));
+    assert_eq!(left, [0, 0, 1, 0]);
     assert_eq!(direct.audit().await, Ok(0));
 }

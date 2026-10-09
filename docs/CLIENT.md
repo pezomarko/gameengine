@@ -238,7 +238,8 @@ The HUD as before, and:
   travel (`FromClient::Travel`, as the `T` key does for the zone named on the command line).
 - **Keys** says what the keys do: nothing else tells a new player.
 - **Enter** opens the chat line (5).
-- **I** opens the inventory, and **E** the stall the body stands at (ITEMS.md 6): screens
+- **I** opens the inventory (ITEMS.md 6.1; under its grid the item bar's four cells, LOOK.md
+  3.2, arranged by drag), and **E** the stall the body stands at (ITEMS.md 6): screens
   like the menu's, with the body standing while one is up.
 - **K** opens the character (MATRIX.md 9.1): the thirty attribute points with what each
   buys, the frame, the armour, the aspects and the kit, edited anywhere; "Wear it" is
@@ -449,11 +450,12 @@ field email                   give the field with that label the keyboard (a cli
 type someone@example.com      characters, as if typed
 key Enter                     Enter | Escape | Tab | BackTab | Backspace | Delete | Left | Right | Up | Down | Home | End | PageUp | PageDown
                               | I | E | P | K | G (the game's own keys that open a screen)
-                              | F (the kit, MODES.md 11.3: pressed for one frame of the game, as a person's key is)
+                              | F (the first item cell, the kit's, MODES.md 11.3: pressed for one frame of the game, as a person's key is)
 click "New character"         the button, row, box or grid cell with that text
 dclick "Aldric"               the same, twice
 hover "sword  slash +2.0%"    the pointer over it, and left there (a tooltip after 150 ms)
 drag "sword  slash +2.0%" weapon   a press on the first, moved over frames, let go on the second (LOOK.md 2.4)
+drag "kit ×3  heals 300, used with F" "bar 8"   the same onto a cell of the item bar (ITEMS.md 6.1)
 expect "Aldric"               some text on the screen contains it
 expect image item/sword       a picture by its key was drawn (an icon in a slot, a portrait)
 say at the characters         print `ui-script: at the characters`

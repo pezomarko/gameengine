@@ -460,11 +460,11 @@ impl ClientState {
                     m.guns[held].reload_until = None;
                 }
             }
-            // The kits likewise (MODES.md 11.3): a use the zone refused (full health) or
-            // does not see is dropped.
-            m.kits = own_state.kits;
-            if !own_state.using_kit {
-                m.kit_until = None;
+            // The item bar likewise (MODES.md 11.3): a use the zone refused (full health)
+            // or does not see is dropped.
+            m.bar = own_state.bar;
+            if own_state.using == 0 {
+                m.use_until = None;
             }
             let immune = (
                 m.statuses.chill_immune_until,
@@ -546,8 +546,8 @@ impl ClientState {
                     // The stacks (MODES.md 11): kits bought at a stall, rounds the zone
                     // read after a buy, a use it refused at full health; the HUD counts
                     // them and the prediction begins a use only with a kit in hand.
-                    || own_state.kits != predicted.kits
-                    || (!own_state.using_kit && predicted.using_kit(last_input_tick))
+                    || own_state.bar != predicted.bar
+                    || (own_state.using == 0 && predicted.using_item(last_input_tick).is_some())
                     || own_state.guns.is_some_and(|g| {
                         (0..2).any(|i| {
                             g.magazine[i] != predicted.guns[i].magazine
@@ -901,8 +901,8 @@ mod tests {
             focus: 90,
             statuses: Vec::new(),
             guns: None,
-            kits: 0,
-            using_kit: false,
+            bar: [0; gm_core::sim::BAR_CELLS],
+            using: 0,
         };
         s.entities = entities;
         s.normalize(None);

@@ -129,9 +129,9 @@ pub struct Player {
     /// The body the last executed frame aimed at (MODES.md 5.2): its health goes on the
     /// wire to this one.
     pub target: EntityId,
-    /// What a kit of this body's stack heals (MODES.md 11.3), from the zone's reading of
-    /// the inventory; 0 until told.
-    pub kit_heal: i32,
+    /// What one of each item cell's stack heals (MODES.md 11.3), from the zone's reading
+    /// of the inventory and the bar; 0 until told, and for a cell that heals nothing.
+    pub bar_heals: [i32; crate::sim::BAR_CELLS],
 }
 
 impl Player {
@@ -322,8 +322,12 @@ pub enum ZoneEvent {
         hand: u8,
         rounds: u16,
     },
-    /// A kit was used up (MODES.md 11.3); the heal is a `Healed` of its own.
-    KitUsed(EntityId),
+    /// One of an item cell's stack was used up (MODES.md 11.3, LOOK.md 3.2): the cell,
+    /// 0-based; the heal is a `Healed` of its own.
+    ItemUsed {
+        id: EntityId,
+        cell: u8,
+    },
     Killed {
         victim: EntityId,
         /// 0 = the world.
@@ -530,7 +534,7 @@ impl Zone {
             ghost: false,
             driver,
             gear: Gear::NONE,
-            kit_heal: 0,
+            bar_heals: [0; crate::sim::BAR_CELLS],
             party: id,
             hold: false,
             unhurt: false,
@@ -558,10 +562,16 @@ impl Zone {
     }
 
     /// The stacks a body carries (MODES.md 11), as the hub reads them: `(template,
-    /// quantity, heals)`. A firearm's reserve is the quantity of the stack its `ammo`
-    /// names; the kits are the stacks that heal, and a kit heals what its template says.
-    /// Told at the claim and after every change the hub knows of.
-    pub fn set_stacks(&mut self, id: EntityId, stacks: &[(String, u32, Option<i32>)]) {
+    /// quantity, heals)`, and its item bar (LOOK.md 3.2): the template on each cell. A
+    /// firearm's reserve is the quantity of the stack its `ammo` names; a cell counts the
+    /// stack it names and heals what that template says. Told at the claim and after
+    /// every change the hub knows of.
+    pub fn set_stacks(
+        &mut self,
+        id: EntityId,
+        stacks: &[(String, u32, Option<i32>)],
+        bar: &[Option<String>],
+    ) {
         let Some(p) = self.players.get_mut(&id) else {
             return;
         };
@@ -581,13 +591,18 @@ impl Zone {
                     .min(u16::MAX as u32) as u16
             };
         }
-        p.mover.kits = stacks
-            .iter()
-            .filter(|(_, _, heals)| heals.is_some())
-            .map(|(_, q, _)| *q)
-            .sum::<u32>()
-            .min(u16::MAX as u32) as u16;
-        p.kit_heal = stacks.iter().filter_map(|(_, _, h)| *h).max().unwrap_or(0);
+        for cell in 0..crate::sim::BAR_CELLS {
+            let template = bar.get(cell).and_then(|t| t.as_deref());
+            let of_cell = stacks
+                .iter()
+                .filter(|(t, _, _)| Some(t.as_str()) == template);
+            p.mover.bar[cell] = of_cell
+                .clone()
+                .map(|(_, q, _)| *q)
+                .sum::<u32>()
+                .min(u16::MAX as u32) as u16;
+            p.bar_heals[cell] = of_cell.filter_map(|(_, _, h)| *h).max().unwrap_or(0);
+        }
     }
 
     pub fn set_party(&mut self, id: EntityId, party: u32) {
@@ -856,8 +871,7 @@ impl Zone {
             let stacks_before = (
                 p.mover.guns[0].reserve,
                 p.mover.guns[1].reserve,
-                p.mover.kits,
-                p.mover.kit_until,
+                p.mover.use_until,
             );
             p.stagger = (p.stagger - STAGGER_DECAY_PER_S * dt).max(0.0);
             let depth = p.queue.len();
@@ -970,27 +984,37 @@ impl Zone {
                     });
                 }
             }
-            if p.mover.kits < stacks_before.2 && p.alive {
-                let before = p.health;
-                p.health = (p.health + p.kit_heal.max(0)).min(p.max_health());
-                let healed = p.health - before;
-                self.events.push(ZoneEvent::KitUsed(id));
-                if healed > 0 {
-                    self.events.push(ZoneEvent::Healed {
-                        target: id,
-                        source: id,
-                        amount: healed,
-                    });
+            // An item's use that ended in the frames (MODES.md 11.3): what its stack does,
+            // a heal for now, and the word to the server (which tells the hub).
+            if let Some(cell) = p.mover.used.take() {
+                if p.alive {
+                    let before = p.health;
+                    let heals = p.bar_heals.get(cell as usize).copied().unwrap_or(0);
+                    p.health = (p.health + heals.max(0)).min(p.max_health());
+                    let healed = p.health - before;
+                    self.events.push(ZoneEvent::ItemUsed { id, cell });
+                    if healed > 0 {
+                        self.events.push(ZoneEvent::Healed {
+                            target: id,
+                            source: id,
+                            amount: healed,
+                        });
+                    }
                 }
             }
-            // A use begun this step at full health is cleared (MODES.md 11.3): a new one,
-            // whether or not the frames ended an earlier one first (a press as one ends
-            // began the next at full health and spent a kit for nothing).
-            if p.mover.kit_until.is_some()
-                && p.mover.kit_until != stacks_before.3
+            // A heal's use begun this step at full health is cleared (MODES.md 11.3): a
+            // new one, whether or not the frames ended an earlier one first (a press as
+            // one ends began the next at full health and spent a kit for nothing).
+            if p.mover.use_until.is_some()
+                && p.mover.use_until != stacks_before.2
+                && p.bar_heals
+                    .get(p.mover.use_cell as usize)
+                    .copied()
+                    .unwrap_or(0)
+                    > 0
                 && p.health >= p.max_health()
             {
-                p.mover.kit_until = None;
+                p.mover.use_until = None;
             }
             if executed == 0 && p.driver == Driver::Client {
                 p.starved_ticks += 1;
@@ -2160,12 +2184,12 @@ impl Zone {
             p.sheet = Sheet::new(build, content, p.team());
         }
         let cooldowns = p.mover.cooldowns;
-        // The rounds in the guns and the kits carried come back with the body (MODES.md
-        // 11.2): a respawn refills nothing.
-        let (guns, kits) = (p.mover.guns, p.mover.kits);
+        // The rounds in the guns and the item bar's stacks come back with the body
+        // (MODES.md 11.2): a respawn refills nothing.
+        let (guns, bar) = (p.mover.guns, p.mover.bar);
         p.mover = Mover::spawn(origin, yaw, &p.sheet);
         p.mover.cooldowns = cooldowns;
-        p.mover.kits = kits;
+        p.mover.bar = bar;
         for (g, kept) in p.mover.guns.iter_mut().zip(guns) {
             g.magazine = kept.magazine.min(g.magazine);
             g.reserve = kept.reserve;
@@ -2357,7 +2381,7 @@ fn compute_anim(p: &Player) -> u8 {
     if p.mover.reloading(p.last_input_tick) {
         return anim::RELOAD;
     }
-    if p.mover.using_kit(p.last_input_tick) {
+    if p.mover.using_item(p.last_input_tick).is_some() {
         return anim::USE;
     }
     if p.mover.commanding(p.last_input_tick) {

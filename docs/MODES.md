@@ -675,8 +675,12 @@ nothing but what the reserve means. The stranger sees the stance only, as now.
 ### 11.3 The kit
 
 `F` uses a kit in every mode (the potion of the action and the RPG modes, the medkit of the
-gun; it is a `buttons::USE` bit, protocol v12, in bit 14 of the two reserved). It is a
-script of **1,500 ms** whatever the zone's tick rate (a town's 20 Hz as a fight's 64): the
+gun; it is a `buttons::USE` bit, protocol v12, in bit 14 of the two reserved). Since
+2026-10-08 the kit is one of the **item cells** of the hotbar (LOOK.md 3.2): four cells on
+`F`, `8`, `9`, `0`, each holding a stack the character carries, the kit on `F` unless
+moved; `USE` names the cell (`use_slot`, protocol v18) and the zone uses one of that
+cell's stack, whatever its template does (a kit heals). What follows holds for every
+cell. It is a script of **1,500 ms** whatever the zone's tick rate (a town's 20 Hz as a fight's 64): the
 hand lowers the weapon (the view model as the reload), the body walks at half speed, a
 stagger or a knockdown interrupts it and keeps the kit; it ends with a `Healed` event of
 `heals` (the numbers of LOOK.md 13.8 show it) and one kit fewer on the stack (`Consume` to
@@ -684,10 +688,10 @@ the hub). Refused at full health and in the air, and while the hands are busy (a
 dash, a reload, the command stance), staggered or down, or with no kit carried. **A press
 is a press** (`USE` is edge-triggered): one that is refused is not kept for when it would
 be allowed; the player presses again. So **a refusal is said**: the HUD shows why, in
-yellow, for a second, where the kits are counted: `at full health`, `not in the air`,
-`hands busy`, `staggered`, `no kit` (2026-10-08: the co-owner pressed `F` after a hit and
-nothing happened, and nothing said why). Kits carried show beside the ammo, bottom right,
-in every mode. No regeneration still (3.1).
+yellow, for a second, over the item cells: `at full health`, `not in the air`, `hands
+busy`, `staggered`, `nothing to use` (an empty cell) (2026-10-08: the co-owner pressed
+`F` after a hit and nothing happened, and nothing said why). The kits carried show in
+their cell, `×3`, in every mode. No regeneration still (3.1).
 
 ### 11.4 The quartermaster
 
@@ -758,34 +762,41 @@ Built as 11.1–11.5 say, with these readings:
   rounds }`, the server tells the hub `Consume` on the row the slot remembers and lowers
   its copy at once. A respawn keeps the magazines and the kits (`Zone::respawn`); a body
   that joins a zone has its guns issued full once.
-- **The kit**: `buttons::USE` (bit 14; bit 15 stays reserved), `F` on the client, in
-  every mode: the client reads it before the mode's own keys (2026-10-08: the RPG mode
-  built its frame another way and never read it, so `F` did nothing there, in the
-  browser and the native client alike; `Input::sim_input` reads it first now, and a
-  client test presses it in the three modes). `Mover.kits` and `kit_until`; `kit_step`
-  begins a use on the press when `kit_refusal` finds nothing against it (`KitRefusal`:
-  `NoKit`, `InTheAir`, `HandsBusy` for a script, a dash, a reload or the command stance,
-  `Staggered` for a stagger or a knockdown; each has its HUD word); `kit_use_ticks(dt)`
-  is `KIT_USE_MS` 1,500 at the zone's rate (it was 96 ticks of the combat rate, which a
-  town at 20 Hz played as 4.8 s); a stagger or a knockdown drops it with the kit kept;
-  it ends with one kit fewer, the zone heals `kit_heal` (a `Healed` with the body as its
-  own source: the green number), says `KitUsed`, logs `kit used` (body, character, the
-  kits left) and tells the hub. A use begun at full health is cleared by the zone the
-  same tick, also one begun in the step that ended the use before it (which used to run
-  on and spend a kit for nothing), and the client drops it on the next snapshot
-  (`using_kit` false). The body walks at half speed meanwhile and fires nothing; the
-  stance `anim::USE` (15); the view model is lowered and worked as for a reload
-  (`kit_progress`). The own block carries `kits` and `using_kit` (protocol v12), and the
-  client adopts them, and the guns' rounds, from a snapshot that differs in them (a
-  stack bought at a stall, a grant while in the zone): before, it took them only with a
+- **The kit, an item cell** (LOOK.md 3.2): `buttons::USE` (bit 14; bit 15 stays
+  reserved) with the cell in `Input.use_slot` (1-based; 0 is the first cell's: protocol
+  v18), `F`, `8`, `9`, `0` on the client, in every mode: the client reads them before the
+  mode's own keys (2026-10-08: the RPG mode built its frame another way and never read
+  `F`, so it did nothing there, in the browser and the native client alike;
+  `Input::sim_input` reads them first now, and a client test presses each in the three
+  modes). `Mover.bar` (`BAR_CELLS` 4 counts), `use_until`, `use_cell` and `used`;
+  `item_step` begins a use on the press when `item_refusal` finds nothing against the
+  cell (`ItemRefusal`: `Empty`, `InTheAir`, `HandsBusy` for a script, a dash, a reload,
+  the command stance or a use under way, `Staggered` for a stagger or a knockdown; each
+  has its HUD word); `kit_use_ticks(dt)` is `KIT_USE_MS` 1,500 at the zone's rate (it was
+  96 ticks of the combat rate, which a town at 20 Hz played as 4.8 s); a stagger or a
+  knockdown drops it with the item kept; it ends with one fewer in the cell and `used`
+  naming the cell, on which the zone applies what the cell's template does
+  (`Player.bar_heals[cell]`: a `Healed` with the body as its own source, the green
+  number), says `ItemUsed { id, cell }`, logs `item used` (body, character, cell,
+  template, left) and tells the hub to consume one of the template the slot's bar names
+  for the cell. A heal's use begun at full health is cleared by the zone the same tick,
+  also one begun in the step that ended the use before it (which used to run on and
+  spend a kit for nothing), and the client drops it on the next snapshot (`using` 0).
+  The body walks at half speed meanwhile and fires nothing; the stance `anim::USE` (15);
+  the view model is lowered and worked as for a reload (`kit_progress`). The own block
+  carries `bar` (four counts) and `using` (the cell, 3 bits; protocol v18), and the
+  client adopts them, and the guns' rounds, from a snapshot that differs in them (a stack
+  bought at a stall, a grant while in the zone): before, it took them only with a
   correction of position or status, so the HUD counted the kits of the claim until the
-  next hit.
-- **The HUD**: "kits N  F" bottom right in every mode, above the ammo in the gun mode,
-  dim at none, "using a kit" in yellow while the hands are at it, and for a second after
-  a press that used none, why (11.3), in yellow: the client tells it from its predicted
-  body (`kit_refusal`) or from its health (`at full health`), logs `kit: <why>`, and
-  `--report` says `kit=N:<state>` (`ready`, `none`, `using`, or the words with dashes:
-  `at-full-health`). The inventory names a stack `ball ×25`.
+  next hit. `Zone::set_stacks(id, stacks, bar)` counts each cell's stack from the reading
+  and its bar (`GearReading.bar`, ITEMS.md 4).
+- **The HUD**: the item cells of the hotbar (LOOK.md 3.2): the kit's icon or name, `×N`,
+  the sweep while the hands are at it, bare at none; and for a second after a press that
+  used nothing, why (11.3), in yellow over the cells: the client tells it from its
+  predicted body (`item_refusal`) or from its health (`at full health`), logs `item F:
+  <why>`, and `--report` says `items=F:kit:3,...` and `item_refused=<words>` with dashes
+  for spaces. The inventory names a stack `ball ×25` and arranges the bar (ITEMS.md
+  6.1).
 - **The quartermaster**: `play.sh people` spawns a second stall bot, Quartermaster, on
   the square (`--sell-at 100`: a silver a listing), granted twelve stacks (three of ten
   balls, three of sixteen pistol rounds, three of thirty carbine rounds, three kits of
@@ -799,15 +810,21 @@ Built as 11.1–11.5 say, with these readings:
   `gm-core` `a_kit_heals_when_pressed_with_free_hands_and_a_refused_press_says_why` (the
   use and its heal at 64 and at 20 Hz, cleared at full health, refused with no kit, in
   the air and with the hands busy, the refused press not kept); `gm-client`
-  `f_is_the_kit_in_every_mode` and `the_hud_says_why_a_kit_was_refused_for_a_second`;
+  `f_is_the_kit_in_every_mode` (the four item keys, the three modes),
+  `the_hud_says_why_a_kit_was_refused_for_a_second`,
+  `the_item_cells_follow_the_abilities_a_gap_apart` and `bag::tests`
+  `a_stack_is_set_on_the_bar_by_a_drag_and_the_hub_keeps_it`; `gm-hub` `tests/items.rs`
+  (the bar's default, `SetBar`, `Bar`, gear refused, kept when emptied);
   `gm-server` `tests/items.rs` `a_kit_bought_at_a_stall_heals_on_a_press_and_is_kept_at_full_health`
   (the real protocol: bought at the stall, the zone's reading after the buy on the own
-  block, hurt by the keeper, the press, 1.5 s, the heal, the hub's stack at two, kept at
-  full health); and `scripts/check-items.sh --desktop` / `--browser` buy the kits at the
-  Keeper's stall beside the sword and press `F` at full health, by UI script (`key F`,
-  CLIENT.md 9), by a real keyboard, and in both browser builds, the WebGL2 buyer a
-  frostweaver (the RPG mode): the client must say `kit: at full health` and the zone
-  log no `kit used`.
+  block's first cell, hurt by the keeper, the press, 1.5 s, the heal, the hub's stack at
+  two, kept at full health; then the kit moved to the third cell through the hub, `F`
+  finding nothing and the third cell's key healing); and `scripts/check-items.sh
+  --desktop` / `--browser` buy the kits at the Keeper's stall beside the sword, drag them
+  onto `bar 8` in the inventory, and press `F` (now empty: `nothing to use`) by UI script
+  (`key F`, CLIENT.md 9) and by a real keyboard, and `8` (`at full health`) by a real
+  keyboard; in both browser builds, the WebGL2 buyer a frostweaver (the RPG mode) who
+  presses `F` at full health; the zone log must show no `item used`.
 - Not built: a stack that splits (one drag moves it whole); a ground pickup of a stack
   (ITEMS.md knows no ground screen); a price per template at a bot's stall; the kit's
   own motion (the reload's is borrowed); the stranger's `USE` stance drawn (it reads as

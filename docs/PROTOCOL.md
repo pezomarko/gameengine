@@ -115,7 +115,7 @@ a few hours at 64 Hz) cost one tick of movement, anything less costs nothing (PL
 | view_tick | 32 | server tick the client is displaying for other entities (its interpolation time); 0 = none. Used for melee lag compensation (section 7.4) |
 | frame_count − 1 | 2 | 1..=4 frames |
 | first_tick | 32 | client tick of the oldest frame; frame `i` is tick `first_tick + i` |
-| frames | 97 each | oldest first |
+| frames | 100 each | oldest first (97 before v18) |
 
 Frame:
 
@@ -129,6 +129,7 @@ Frame:
 | ability | 8 | slot activated this tick (1-based), 0 = none |
 | held | 2 | the weapon in hand of a gun build (MODES.md 3.7): 0 the primary, 1 the secondary, 2 the knife; 3 is malformed |
 | target | 32 | the body an activation this tick is aimed at (MODES.md 5.3); 0 = none |
+| use_slot | 3 | v18: the item cell a `use` this tick is of (LOOK.md 3.2), 1–4; 0 = none named, which is the first cell's; 5–7 are malformed |
 
 Movement direction lives in `forward`/`side` only; there are no forward/back/left/right buttons
 (the Phase 0 skeleton listed both, which was redundant).
@@ -195,7 +196,7 @@ Own block (never delta-encoded: it is small and the client must adopt it exactly
 | per status: stacks | 3 | |
 | per status: source | uvar | v17: the entity that applied it (0: nobody). A Taunt's is who the body is turned to (MATRIX.md 8) |
 | guns | 1 | v11: 1 for a gun build (MODES.md 3.8), then for the primary and the secondary each `magazine` (uvar) and `reserve` (uvar), and 1 bit: the one in hand is being reloaded |
-| kits | uvar | v12: the kits carried (MODES.md 11.3), then 1 bit: a kit is in use |
+| bar | 4 × uvar | v18: the item bar (LOOK.md 3.2): how many of each cell's stack the body carries, then 3 bits: the cell in use, 1–4, 0 for none (v12–v17: one uvar, the kits, and one bit) |
 
 Entity record:
 
@@ -886,3 +887,17 @@ version hold.
   `status` mask is **24** bits (`gm_net::snapshot::STATUS_BITS`).
 - Nothing else changes; a v16 client would read the own block's statuses one bit short, and
   the version byte keeps it out.
+
+## 30. Changes in v18 (the item bar, 2026-10-09)
+
+`PROTOCOL_VERSION` 18 (LOOK.md 3.2, MODES.md 11.3). Three bits in the input frame and the
+own block reshaped:
+
+- The frame carries `use_slot` (3 bits) after `target`: the item cell a `use` (button
+  14) is of, 1–4; 0 names none and is the first cell's, so an old habit (`F`) still uses
+  the kit. 5–7 are malformed. A frame is 100 bits.
+- The own block carries the bar, four uvars (how many of each cell's stack the body
+  carries), then the cell in use in 3 bits (0 none), where v12 carried one count and one
+  bit. The client adopts them as it adopts the rounds, and drops a use the zone cleared.
+- Nothing new in the control stream. Hub protocol 12 and the players' protocol 7 carry
+  the bar's arrangement (ITEMS.md 4).
