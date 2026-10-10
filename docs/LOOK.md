@@ -825,13 +825,11 @@ Seen on the software GPU at 1920 × 1080 (`strafe.sh` in the session's scratchpa
 held with `xdotool`): A in profile to the left, D to the right, W away, S a backpedal,
 idle on the look.
 
-The RPG mode was the exception (MODES.md 5.1, 10.3; 2026-10-08): its camera orbits a
-body that does not turn with it, so an RPG body (snapshot flag `RPG`, v15) was drawn
-standing as it was left, facing its last travel or the target it last turned to, and ran
-facing its travel whichever way, S included. Since 2026-10-09 it needs none: the RPG
-frames carry the body's own facing instead of the camera's (MODES.md 10.3), so its `yaw`
-is where it walks or was left, the zone fires there, and the one rule above draws every
-body. The flag is retired.
+The RPG mode is the exception (MODES.md 5.1, 10.3; 2026-10-08): its camera orbits a body
+that does not turn with it, so an RPG body (snapshot flag `RPG`, v15) is drawn standing as
+it was left, facing its last travel or the target it last turned to, and runs facing its
+travel whichever way, S included; it turns to its look only for an action, where the zone
+fires.
 
 ### 13.10 The gun in the hand (2026-10-07, the director played the gun mode)
 

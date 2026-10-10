@@ -72,10 +72,9 @@ pub mod flags {
     /// Crouched (MODES.md 3.5, v14): the body is drawn in its squat and its hitbox is
     /// `CROUCH_DROP` shorter; every body carries it.
     pub const CROUCHED: u16 = 1 << 8;
-    /// Bit 9 was `RPG` (v15 to v17): the body did not turn with its camera and the
-    /// client drew it by its travel. Since 2026-10-09 an RPG body's frames carry its own
-    /// facing (MODES.md 10.3), so the bit is never set; it stays on the wire, retired.
-    pub const RETIRED_RPG: u16 = 1 << 9;
+    /// In the RPG mode (MODES.md 5.1, v15): the body does not turn with its camera, so a
+    /// client draws it standing the way it last went or was turned, not the frame's yaw.
+    pub const RPG: u16 = 1 << 9;
     /// How many bits of flags the wire carries.
     pub const BITS: u32 = 10;
 }

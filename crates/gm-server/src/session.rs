@@ -631,6 +631,11 @@ pub fn player_state(p: &Player, own: bool) -> EntityState {
     if p.mover.crouched {
         f |= flags::CROUCHED;
     }
+    // Everyone sees an RPG body stand the way it was left (MODES.md 5.1): its frames'
+    // yaw is its camera's, which is nothing to draw it by.
+    if p.sheet.kit.mode == gm_core::vocab::Mode::Rpg {
+        f |= flags::RPG;
+    }
     EntityState {
         id: p.id,
         spawn: SpawnInfo::Player {

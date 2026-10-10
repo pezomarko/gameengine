@@ -212,7 +212,7 @@ Entity record:
 | vel | 3 × svar | VEL. Absolute when SPAWN (or the baseline record has no velocity), delta otherwise |
 | anim | 8 (+ uvar) | ANIM. When the stance is a script's (windup 3, swing 4, recovery 5, cast 10), the **acting ability** follows as a uvar: the `AbilityId` of the script (the pack's index and one). ANIM is set when either changes (v9, section 21) |
 | health | uvar | HEALTH |
-| flags | 10 | FLAGS. bit 0 alive, 1 on ground, 2 guarding (block held), 3 dashing, 4 jump held, 5 script running, 6 parry window or whiff recovery, 7 commanding (in the command stance; own entity only), 8 crouched (MODES.md 3.5; v14, every body), 9 retired (was `RPG`, v15 to v17; never set since 2026-10-09, section 27) |
+| flags | 10 | FLAGS. bit 0 alive, 1 on ground, 2 guarding (block held), 3 dashing, 4 jump held, 5 script running, 6 parry window or whiff recovery, 7 commanding (in the command stance; own entity only), 8 crouched (MODES.md 3.5; v14, every body), 9 in the RPG mode (MODES.md 5.1; v15, every body) |
 | status | 24 | STATUS. A bit per `Status` index: the cosmetic summary for other entities (auras); 16 bits until v17 (`STATUS_BITS`) |
 
 Spawn info: player → `frame` 2 bits (0 colossus, 1 striker, 2 caster, 3 infiltrator), `team`
@@ -859,11 +859,6 @@ in the simulation's snapshots:
   turning to its `yaw` only for an action, and standing otherwise as it was left
   (`app::facing`). Nothing else reads the bit; the zone's aim, hitboxes and ledger are as
   before.
-
-Retired on 2026-10-09 (MODES.md 10.3): an RPG body's frames carry its own facing now,
-the way it walks or was left, so the bit says nothing a client needs and is never set.
-It stays on the wire as bit 9 (`flags::RETIRED_RPG`) so the record's width and the
-version hold.
 
 ## 28. Changes in v16 (six elements, 2026-10-09)
 
