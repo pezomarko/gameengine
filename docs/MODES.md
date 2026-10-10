@@ -562,7 +562,10 @@ Built as section 5 says, with these readings:
   2026-10-08 midday: "char should face direction it last stopped at, or was left at";
   it was drawn at the camera's yaw, swinging round with every drag of the orbit). An
   action without a target fires the camera's way, so the body turns to it for the
-  script and keeps that facing after. Every body in this mode is drawn by the rule, the
+  script and keeps that facing after. (PR 28 of 2026-10-09 made the frame carry the body's
+  own yaw instead, so an untargeted cast flew where the body last walked; the director
+  the next morning: "my caster was previously mouse controlled and now that is lost ...
+  just revert to previous thing": reverted, PR 29. The camera aims the free cast.) Every body in this mode is drawn by the rule, the
   own and the ones seen (snapshot flag `RPG`, protocol v15); `S` walks the body toward
   the camera facing that way, not a backpedal. The own body is drawn facing where the
   mover does while a target-action's turn holds it (`lock_yaw`, predicted on the client
