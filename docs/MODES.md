@@ -253,8 +253,7 @@ right of the crosshair (hits in the current chain, fading two seconds after the 
 
 ### 5.1 What is kept from the root
 
-The camera orbits and the body does not turn with it; WASD moves about the camera and
-the body faces the way it goes (`S` turns it round, toward the camera: no backpedal); a
+The camera orbits and the body does not turn with it; WASD moves about the camera; a
 click on the ground sends the body there; a click on a body targets it and `Tab` cycles;
 an action with a target walks the body into range and then lands, every time; a guard is
 held. (The root's repeating primary is not kept: nothing fires by itself, the pace of a
@@ -288,8 +287,7 @@ An action pressed with a target:
 
 Range is the ability's: a melee arc's `reach`, a bolt's `range` (new, content: the musket
 600, the crossbow 900, a knife 300), an area's `origin: Aim` radius. Without a target an
-action fires where the body faces, as in the action mode without the magnet: the way it
-last walked or was turned, never the camera's (10.3, 2026-10-09).
+action fires where the body faces, as in the action mode without the magnet.
 
 ### 5.4 On the wire
 
@@ -593,26 +591,6 @@ Built as section 5 says, with these readings:
 - Not built: a body walking round other bodies (the grid knows the map only), a
   target kept five seconds out of sight (it is let go when it leaves the frame's
   knowledge), the people page's and the tavern's word of the mode.
-- **The frame's yaw is the body's facing (2026-10-09).** The director, on the PC and
-  the phone: "action (skill) most of the time hits in front of camera (camera
-  direction) instead of char direction, also mobile movements make it face camera
-  direction when stopped as well, and also doesnt orient backwards, always forwards but
-  moves backwards ... camera pan is only view, controls should orient chars and attack
-  in that orientation". Until then the frames carried the camera's yaw and the body's
-  facing was the drawing's alone (`app::facing` with a freedom from the look, the `RPG`
-  snapshot flag): the zone fired an action without a target the camera's way, the
-  mover's yaw the guard and the magnet read was the camera's, everyone else saw the
-  body at the camera's yaw whenever the drawing's rule fell back to it, and `S` moved
-  the body backwards along the camera with its facing only drawn round. Now the RPG
-  frame (`rpg::RpgFrame`) carries the body's own yaw: **walking**, the way it goes (the
-  axes about the camera, or the nav grid's step, turned into a world direction: `yaw`
-  there, `forward` the stick's push, nothing to the side), so `S` turns the body round
-  and walks it toward the camera; **standing**, the mover's current yaw, which keeps the
-  last walk's facing and the turn a target-action or the magnet made, whatever the
-  camera does. The zone, the guard's facing test, the magnet, the tracer and every
-  other client read the same yaw; `app::facing` has no RPG exception any more and the
-  snapshot's bit 9 is retired (PROTOCOL.md 27). The camera is only the view: its yaw
-  goes nowhere but the orbit and the axes.
 
 ## 11. Rounds, kits and the quartermaster (2026-10-07, built as 15d: 11.7)
 

@@ -2,12 +2,6 @@
 //! a walk on the nav grid, and target-actions that wait for the body to be in range.
 //! Everything here makes ordinary frames: the zone sees inputs, the prediction and the
 //! ledger are untouched; only the aim at the target is the zone's.
-//!
-//! The frame's yaw is the body's facing, not the camera's (MODES.md 5.1, 10.3): walking,
-//! the way it goes (`S` turns it round toward the camera); standing, the way it was
-//! left, the mover's own yaw, which a target-action's turn has set. The zone fires an
-//! action without a target along that yaw, so the body strikes where it faces and the
-//! camera is only the view.
 
 use glam::{Mat4, Vec3};
 use gm_ai::nav::{NavGrid, Navigator};
@@ -94,12 +88,11 @@ pub struct Rpg {
     pub dist: f32,
 }
 
-/// What a frame's input is made of in the RPG mode. `yaw` is the body's facing: the
-/// movement is along it (`forward`, nothing to the side) and the zone fires along it.
+/// What a frame's input is made of in the RPG mode.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RpgFrame {
-    pub yaw: f32,
     pub forward: f32,
+    pub side: f32,
     pub buttons: u16,
     pub ability: u8,
     pub target: u32,
@@ -245,8 +238,7 @@ impl Rpg {
 
     /// The input of one tick (MODES.md 5.3): WASD as pressed, else the walk to the goal
     /// or toward the target the waiting action needs; the action's press when the target
-    /// is within its range and in sight. `camera_yaw` is what the axes are about;
-    /// `body_yaw` is the mover's, the facing the frame keeps while nothing moves the body.
+    /// is within its range and in sight. `yaw` is the camera's, what the axes are about.
     #[allow(clippy::too_many_arguments)]
     pub fn frame(
         &mut self,
@@ -255,21 +247,18 @@ impl Rpg {
         mover: &Mover,
         bodies: &[Body],
         axes: (f32, f32),
-        camera_yaw: f32,
-        body_yaw: f32,
+        yaw: f32,
         tick: u32,
         hz: u32,
     ) -> RpgFrame {
         let mut out = RpgFrame {
-            yaw: body_yaw,
             target: self.target.unwrap_or(0),
             ..RpgFrame::default()
         };
         if axes.0 != 0.0 || axes.1 != 0.0 {
             self.moved_by_hand();
-            let (fwd, right) = yaw_vectors(camera_yaw);
-            let wish = (fwd * axes.0 + right * axes.1).truncate();
-            out.walk(wish);
+            out.forward = axes.0;
+            out.side = axes.1;
             return out;
         }
         let pos = mover.mv.origin;
@@ -321,25 +310,13 @@ impl Rpg {
                 }
             } else {
                 let wish = (steer.toward - pos).truncate().normalize_or_zero();
-                // A sidestep round an obstacle is to the wish's right.
-                let aside = glam::Vec2::new(wish.y, -wish.x) * self.navigator.sidestep(tick);
-                out.walk(wish + aside);
+                let (fwd, right) = yaw_vectors(yaw);
+                let side_step = self.navigator.sidestep(tick);
+                out.forward = wish.dot(fwd.truncate()).clamp(-1.0, 1.0);
+                out.side = (wish.dot(right.truncate()) + side_step).clamp(-1.0, 1.0);
             }
         }
         out
-    }
-}
-
-impl RpgFrame {
-    /// The body walks the way of `wish` (world, flat), facing it: a stick's part-way
-    /// push is a part-way `forward`; nothing moves to the side.
-    fn walk(&mut self, wish: glam::Vec2) {
-        let speed = wish.length();
-        if speed < 1e-4 {
-            return;
-        }
-        self.yaw = wish.y.atan2(wish.x).to_degrees().rem_euclid(360.0);
-        self.forward = speed.min(1.0);
     }
 }
 
@@ -407,81 +384,5 @@ mod tests {
         rpg.click(&world, from, Vec3::new(0.6, 0.0, -0.8).normalize(), &bodies);
         assert!(rpg.walk.is_some());
         assert_eq!(rpg.target, Some(8));
-    }
-
-    #[test]
-    fn the_frame_faces_the_way_the_body_goes_and_keeps_it_standing() {
-        use gm_core::sim::Mover;
-        let world = BoxWorld::floor();
-        let pack = gm_core::sim::test_content::pack(gm_core::tick::TickRate::COMBAT);
-        let build = pack.build("frostweaver").unwrap().clone();
-        let sheet = gm_core::build::Sheet::new(build, &pack, 1);
-        let mut mover = Mover::new(Vec3::new(0.0, 0.0, 40.0), 30.0);
-        mover.yaw = 30.0;
-        let mut rpg = Rpg::new();
-        let camera = 90.0;
-        // W: away from the camera, facing that way. S: toward it, turned round, not a
-        // backpedal. D: to the camera's right. A half push on a stick is a half walk.
-        let f = rpg.frame(
-            &world,
-            &sheet.kit,
-            &mover,
-            &[],
-            (1.0, 0.0),
-            camera,
-            mover.yaw,
-            0,
-            64,
-        );
-        assert_eq!((f.yaw.round(), f.forward), (90.0, 1.0));
-        let f = rpg.frame(
-            &world,
-            &sheet.kit,
-            &mover,
-            &[],
-            (-1.0, 0.0),
-            camera,
-            mover.yaw,
-            0,
-            64,
-        );
-        assert_eq!((f.yaw.round(), f.forward), (270.0, 1.0));
-        let f = rpg.frame(
-            &world,
-            &sheet.kit,
-            &mover,
-            &[],
-            (0.0, 1.0),
-            camera,
-            mover.yaw,
-            0,
-            64,
-        );
-        assert_eq!((f.yaw.round(), f.forward), (0.0, 1.0));
-        let f = rpg.frame(
-            &world,
-            &sheet.kit,
-            &mover,
-            &[],
-            (0.0, -0.5),
-            camera,
-            mover.yaw,
-            0,
-            64,
-        );
-        assert_eq!((f.yaw.round(), f.forward), (180.0, 0.5));
-        // Nothing held: the body stands as it was left, whatever the camera does.
-        let f = rpg.frame(
-            &world,
-            &sheet.kit,
-            &mover,
-            &[],
-            (0.0, 0.0),
-            200.0,
-            mover.yaw,
-            0,
-            64,
-        );
-        assert_eq!((f.yaw, f.forward), (30.0, 0.0));
     }
 }
